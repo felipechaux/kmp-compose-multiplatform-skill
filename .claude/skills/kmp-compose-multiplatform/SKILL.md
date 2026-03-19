@@ -582,7 +582,13 @@ fun provideHttpClient(
     }
     install(Logging) {
         logger = Logger.DEFAULT
-        level = LogLevel.HEADERS   // use LogLevel.BODY only in debug
+        level = if (BuildKonfig.IS_DEBUG) LogLevel.HEADERS else LogLevel.NONE
+    }
+    // Automatic retry for transient failures
+    install(HttpRequestRetry) {
+        retryOnServerErrors(maxRetries = 3)
+        retryOnException(maxRetries = 3, retryOnTimeout = true)
+        exponentialDelay(base = 2.0, maxDelayMs = 10_000)
     }
     // Auth token injection
     install(Auth) {
@@ -645,25 +651,49 @@ class FakeUserRepository : UserRepository {
 
 ## Logging
 
-Use `expect`/`actual` for platform logging — never use `println()` in production code:
+Use `expect`/`actual` for platform logging — **never use `println()`** in production code. Never log sensitive data (tokens, passwords, PII).
 
 ```kotlin
-// commonMain
+// commonMain — log levels matching platform conventions
+enum class LogLevel { DEBUG, INFO, WARN, ERROR }
+
 expect fun logDebug(tag: String, message: String)
+expect fun logInfo(tag: String, message: String)
+expect fun logWarn(tag: String, message: String)
 expect fun logError(tag: String, message: String, throwable: Throwable? = null)
 ```
 
 ```kotlin
-// androidMain
-actual fun logDebug(tag: String, message: String) = Log.d(tag, message)
-actual fun logError(tag: String, message: String, throwable: Throwable?) = Log.e(tag, message, throwable)
+// androidMain — use Timber for structured Android logging
+actual fun logDebug(tag: String, message: String) = Timber.tag(tag).d(message)
+actual fun logInfo(tag: String, message: String) = Timber.tag(tag).i(message)
+actual fun logWarn(tag: String, message: String) = Timber.tag(tag).w(message)
+actual fun logError(tag: String, message: String, throwable: Throwable?) =
+    Timber.tag(tag).e(throwable, message)
+```
+
+Initialize Timber in `Application.onCreate()`:
+```kotlin
+if (BuildConfig.DEBUG) Timber.plant(Timber.DebugTree())
+// In production, plant a crash reporting tree (Crashlytics, etc.)
 ```
 
 ```kotlin
-// iosMain
-actual fun logDebug(tag: String, message: String) = NSLog("[$tag] DEBUG: $message")
+// iosMain — use os_log (not NSLog, which is deprecated for structured logging)
+import platform.Foundation.NSLog
+import platform.darwin.*
+
+actual fun logDebug(tag: String, message: String) {
+    os_log_with_type(OS_LOG_DEFAULT, OS_LOG_TYPE_DEBUG, "[$tag] $message")
+}
+actual fun logInfo(tag: String, message: String) {
+    os_log_with_type(OS_LOG_DEFAULT, OS_LOG_TYPE_INFO, "[$tag] $message")
+}
+actual fun logWarn(tag: String, message: String) {
+    os_log_with_type(OS_LOG_DEFAULT, OS_LOG_TYPE_ERROR, "[$tag] WARN: $message")
+}
 actual fun logError(tag: String, message: String, throwable: Throwable?) {
-    NSLog("[$tag] ERROR: $message ${throwable?.message ?: ""}")
+    os_log_with_type(OS_LOG_DEFAULT, OS_LOG_TYPE_FAULT, "[$tag] ERROR: $message ${throwable?.message ?: ""}")
 }
 ```
 
@@ -696,6 +726,8 @@ actual fun logError(tag: String, message: String, throwable: Throwable?) {
 - `references/error-handling.md` — `AppError` hierarchy, `safeApiCall`, error mapping, retry logic, UI error display
 - `references/testing.md` — fakes, ViewModel tests with Turbine, Compose UI tests, Room in-memory, Koin test modules
 - `references/ios-interop.md` — Swift naming conventions, nullability bridging, SKIE, coroutines↔Swift Concurrency, collection bridging
+- `references/navigation.md` — deep links, nested nav, bottom navigation, back handling, transitions, `SavedStateHandle`
+- `references/build-system.md` — convention plugins, KSP config, `gradle.properties`, `settings.gradle.kts`, build performance
 
 ## Official References
 

@@ -26,16 +26,16 @@ Without this skill, Claude gives you generic Android advice. With it, Claude und
 |------|---------|
 | **Architecture** | Clean Architecture with feature-based modularization (Now in Android pattern) |
 | **UI** | Compose Multiplatform, Material 3, `@Stable`, state hoisting, previews |
-| **Navigation** | Type-safe sealed class routes, NavHostController, one-time navigation events |
+| **Navigation** | Deep links, nested nav, bottom nav, back handling, transitions, `SavedStateHandle` |
 | **DI** | Koin Multiplatform — modules, ViewModels, scopes, platform DI |
-| **Networking** | Ktor client — auth, logging, timeout, error mapping to domain types |
-| **Persistence** | Room KMP + DataStore KMP — migrations, reactive queries, expect/actual setup |
+| **Networking** | Ktor — auth bearer, `HttpRequestRetry`, logging, timeout, domain error mapping |
+| **Persistence** | Room KMP + DataStore KMP — migrations, reactive queries, `@Transaction` |
 | **State** | UDF pattern, StateFlow, SharedFlow events, `stateIn()`, Resource sealed class |
 | **Error Handling** | Typed `AppError` hierarchy, `safeApiCall`, retry with backoff, UI error mapping |
-| **Build System** | Version catalog, BuildKonfig, KSP, convention plugins |
-| **iOS** | SPM wrapper, ComposeUIViewController, SKIE, Swift interop, collection bridging |
+| **Build System** | Convention plugins, version catalog, KSP config, `gradle.properties`, build performance |
+| **iOS** | SPM wrapper, SKIE, Swift interop, `os_log`, collection bridging, thread safety |
 | **Testing** | Fakes + Turbine, ViewModel tests, Compose UI tests, Room in-memory, Koin teardown |
-| **Logging** | `expect`/`actual` log functions for Android (`Log`) and iOS (`NSLog`) |
+| **Logging** | Log levels, Timber (Android), `os_log` (iOS), sensitive data redaction |
 
 ## Installation
 
@@ -130,7 +130,9 @@ The skill ([`.claude/skills/kmp-compose-multiplatform/`](.claude/skills/kmp-comp
 - `compose-best-practices.md` — `@Stable`, `derivedStateOf`, Material 3, performance
 - `error-handling.md` — `AppError` hierarchy, `safeApiCall`, retry logic, UI error mapping
 - `testing.md` — fakes, Turbine, ViewModel tests, Compose UI tests, Room in-memory, Koin teardown
-- `ios-interop.md` — Swift naming, nullability, SKIE, coroutines↔Swift Concurrency, collection bridging
+- `ios-interop.md` — Swift naming, nullability, SKIE, `os_log`, coroutines↔Swift Concurrency, collection bridging
+- `navigation.md` — deep links, nested nav, bottom nav, back handling, transitions, `SavedStateHandle`
+- `build-system.md` — convention plugins, KSP config, `gradle.properties`, `settings.gradle.kts`, build performance
 
 ## Architecture Reference
 

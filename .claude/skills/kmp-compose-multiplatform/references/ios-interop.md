@@ -284,24 +284,39 @@ cd "$SRCROOT/../.."
 
 ## Logging from iOS
 
-Use `NSLog` or `os_log` via `expect/actual`:
-
-```kotlin
-// commonMain
-expect fun logDebug(tag: String, message: String)
-expect fun logError(tag: String, message: String, throwable: Throwable? = null)
-```
+Use `os_log` (not `NSLog` — it is deprecated for structured logging) via `expect/actual`. `os_log` integrates with the unified logging system visible in Console.app and Instruments.
 
 ```kotlin
 // iosMain
+import platform.darwin.*
+
 actual fun logDebug(tag: String, message: String) {
-    NSLog("[$tag] DEBUG: $message")
+    os_log_with_type(OS_LOG_DEFAULT, OS_LOG_TYPE_DEBUG, "[$tag] $message")
+}
+
+actual fun logInfo(tag: String, message: String) {
+    os_log_with_type(OS_LOG_DEFAULT, OS_LOG_TYPE_INFO, "[$tag] $message")
+}
+
+actual fun logWarn(tag: String, message: String) {
+    os_log_with_type(OS_LOG_DEFAULT, OS_LOG_TYPE_ERROR, "[$tag] WARN: $message")
 }
 
 actual fun logError(tag: String, message: String, throwable: Throwable?) {
-    NSLog("[$tag] ERROR: $message ${throwable?.message ?: ""}")
+    os_log_with_type(OS_LOG_DEFAULT, OS_LOG_TYPE_FAULT, "[$tag] ERROR: $message ${throwable?.message ?: ""}")
 }
 ```
+
+**Log level mapping:**
+
+| Kotlin Level | `os_log` Type | Visible in |
+|---|---|---|
+| DEBUG | `OS_LOG_TYPE_DEBUG` | Instruments / Console (debug builds) |
+| INFO | `OS_LOG_TYPE_INFO` | Console.app |
+| WARN | `OS_LOG_TYPE_ERROR` | Console.app + crash reports |
+| ERROR | `OS_LOG_TYPE_FAULT` | Console.app + crash reports + telemetry |
+
+**Never log sensitive data** (auth tokens, passwords, PII) — `os_log` entries can persist on device.
 
 ```kotlin
 // androidMain
