@@ -4,7 +4,7 @@
 
 # KMP + Compose Multiplatform Agent Skill
 
-**Make your AI coding tool actually understand Kotlin Multiplatform.**
+**Make your AI coding tool actually understand Kotlin-Compose Multiplatform.**
 Backed by real JetBrains and Google architecture docs — not vibes.
 
 ![Setup time](https://img.shields.io/badge/setup-5%20min-brightgreen)
