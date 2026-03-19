@@ -1,4 +1,5 @@
 ---
+name: kmp-compose-multiplatform
 description: Expert Kotlin Multiplatform (KMP) and Compose Multiplatform development guidance. Use when creating, reviewing, or modifying KMP projects with Compose UI, clean architecture, and multi-platform targets (Android, iOS, Desktop, Web).
 ---
 
@@ -137,99 +138,6 @@ sealed class HomeUiState {
     data object Loading : HomeUiState()
     data class Success(val data: IcebreakerResult) : HomeUiState()
     data class Error(val message: String) : HomeUiState()
-}
-```
-
----
-
-## Compose Multiplatform Best Practices
-
-### State Hoisting
-
-Always hoist state to the screen level. Composables should be stateless:
-
-```kotlin
-// CORRECT — stateless composable
-@Composable
-fun HomeContent(
-    uiState: HomeUiState,
-    onGenerateClick: () -> Unit,
-    modifier: Modifier = Modifier
-) { ... }
-
-// CORRECT — screen composable connects to ViewModel
-@Composable
-fun HomeScreen(
-    viewModel: HomeViewModel = koinViewModel()
-) {
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    HomeContent(
-        uiState = uiState,
-        onGenerateClick = viewModel::onGenerateClicked
-    )
-}
-```
-
-### Design System
-
-- Use **Material 3** (`MaterialTheme`) everywhere
-- Define a central `AppTheme.kt` in `presentation/ui/theme/`
-- Dark/light mode via `isSystemInDarkTheme()`
-- Color palette as `object ColorPalette { val Primary = Color(...) }`
-- Typography scale via `Typography { ... }`
-- Never hardcode colors or text styles in composables — always use `MaterialTheme.colorScheme.*` and `MaterialTheme.typography.*`
-
-### Modifiers
-
-- Always accept `modifier: Modifier = Modifier` as last parameter before lambdas
-- Apply modifier as the first thing inside the root layout
-- Never apply padding inside a composable that accepts a modifier — let the caller decide spacing
-
-### Previews
-
-Always provide previews for composables:
-
-```kotlin
-@Preview(showBackground = true)
-@Preview(showBackground = true, uiMode = UI_MODE_NIGHT_YES)
-@Composable
-private fun HomeContentPreview() {
-    AppTheme {
-        HomeContent(uiState = HomeUiState.Idle, onGenerateClick = {})
-    }
-}
-```
-
-### Navigation
-
-Use type-safe sealed class routes:
-
-```kotlin
-sealed class Screen(val route: String) {
-    data object Home : Screen("home")
-    data object Detail : Screen("detail/{id}") {
-        fun createRoute(id: String) = "detail/$id"
-    }
-}
-```
-
-Navigation setup:
-
-```kotlin
-@Composable
-fun AppNavigation(navController: NavHostController = rememberNavController()) {
-    NavHost(
-        navController = navController,
-        startDestination = Screen.Home.route,
-        enterTransition = { fadeIn(animationSpec = tween(300)) },
-        exitTransition = { fadeOut(animationSpec = tween(300)) }
-    ) {
-        composable(Screen.Home.route) { HomeScreen(navController) }
-        composable(Screen.Detail.route) { backStackEntry ->
-            val id = backStackEntry.arguments?.getString("id") ?: return@composable
-            DetailScreen(id = id, navController = navController)
-        }
-    }
 }
 ```
 
@@ -431,7 +339,6 @@ buildkonfig = "0.17.1"
 coil = "3.0.4"
 
 [libraries]
-# Compose Multiplatform (accessed via compose.* in sourceSets)
 # Koin
 koin-core = { module = "io.insert-koin:koin-core", version.ref = "koin" }
 koin-android = { module = "io.insert-koin:koin-android", version.ref = "koin" }
@@ -508,13 +415,6 @@ abstract class AppDatabase : RoomDatabase() {
 ```
 
 ```kotlin
-// commonMain — expect
-expect class DatabaseBuilder(context: Any?) {
-    fun build(): AppDatabase
-}
-```
-
-```kotlin
 // androidMain — actual
 actual class DatabaseBuilder actual constructor(private val context: Any?) {
     actual fun build(): AppDatabase = Room.databaseBuilder<AppDatabase>(
@@ -540,18 +440,6 @@ actual class DatabaseBuilder actual constructor(context: Any?) {
 expect fun createDataStore(producePath: () -> String): DataStore<Preferences>
 
 internal const val DATASTORE_FILE = "app_prefs.preferences_pb"
-```
-
-```kotlin
-// androidMain
-actual fun createDataStore(producePath: () -> String): DataStore<Preferences> =
-    PreferenceDataStoreFactory.createWithPath(produceFile = { producePath().toPath() })
-```
-
-```kotlin
-// iosMain
-actual fun createDataStore(producePath: () -> String): DataStore<Preferences> =
-    PreferenceDataStoreFactory.createWithPath(produceFile = { producePath().toPath() })
 ```
 
 ---
@@ -622,169 +510,11 @@ class FakeUserRepository : UserRepository {
 }
 ```
 
-### ViewModel Tests
-
-```kotlin
-class HomeViewModelTest {
-
-    @Test
-    fun `uiState emits Loading then Success`() = runTest {
-        val viewModel = HomeViewModel(FakeGenerateIcebreakerUseCase())
-
-        val states = mutableListOf<HomeUiState>()
-        val job = launch { viewModel.uiState.toList(states) }
-
-        viewModel.onGenerateClicked()
-        advanceUntilIdle()
-
-        assertTrue(states.any { it is HomeUiState.Loading })
-        assertTrue(states.last() is HomeUiState.Success)
-        job.cancel()
-    }
-}
-```
-
 **Rules**:
 - Never use Mockito or MockK — use fakes/test doubles
 - All shared tests go in `commonTest`
 - Platform-specific tests in `androidTest`/`iosTest`
 - Use `runTest` from `kotlinx-coroutines-test` for coroutine testing
-
----
-
-## iOS Integration
-
-### Swift Package Manager
-
-The recommended `Package.swift` pattern uses a **Wrapper target** that combines the KMP binary XCFramework with any third-party Swift dependencies (e.g. RevenueCat). This is the production pattern used in real KMP projects:
-
-```swift
-// swift-tools-version: 5.9
-// Auto-generated by GitHub Actions release workflow – do not edit manually.
-import PackageDescription
-
-let package = Package(
-    name: "MyShared",
-    platforms: [
-        .iOS(.v16)
-    ],
-    products: [
-        .library(
-            name: "MyShared",
-            targets: ["MySharedWrapper"]   // expose wrapper, not the binary directly
-        ),
-    ],
-    dependencies: [
-        // Add Swift-only dependencies here (RevenueCat, Firebase, etc.)
-        .package(url: "https://github.com/RevenueCat/purchases-hybrid-common.git", exact: "17.32.0"),
-    ],
-    targets: [
-        // Binary target — the compiled XCFramework from Kotlin/Native
-        .binaryTarget(
-            name: "MySharedBinary",
-            url: "https://github.com/org/repo/releases/download/v1.0.0/MyShared.xcframework.zip",
-            checksum: "abc123..."  // sha256 of the zip — auto-computed in CI
-        ),
-        // Wrapper target — combines binary + Swift deps into one importable product
-        .target(
-            name: "MySharedWrapper",
-            dependencies: [
-                "MySharedBinary",
-                .product(name: "PurchasesHybridCommon", package: "purchases-hybrid-common"),
-                .product(name: "PurchasesHybridCommonUI", package: "purchases-hybrid-common"),
-            ]
-        )
-    ]
-)
-```
-
-**Why the Wrapper pattern?**
-- `binaryTarget` cannot declare Swift package dependencies directly
-- The wrapper target bridges the XCFramework binary with Swift-only dependencies
-- iOS app only needs to import `MyShared` (the wrapper product)
-- CI auto-generates this file — never edit it manually
-
-### CI/CD — Auto-generating Package.swift
-
-The GitHub Actions release workflow should:
-1. Build the XCFramework: `./gradlew assembleXCFramework`
-2. Zip it: `zip -r MyShared.xcframework.zip MyShared.xcframework`
-3. Compute checksum: `swift package compute-checksum MyShared.xcframework.zip`
-4. Upload zip as GitHub Release asset
-5. Update `Package.swift` with the release URL and checksum
-6. Commit `Package.swift` back to `main`
-
-```yaml
-# .github/workflows/release.yml (key steps)
-- name: Build XCFramework
-  run: ./gradlew :shared:assembleReleaseXCFramework
-
-- name: Zip XCFramework
-  run: zip -r MyShared.xcframework.zip shared/build/XCFrameworks/release/MyShared.xcframework
-
-- name: Compute checksum
-  run: echo "CHECKSUM=$(swift package compute-checksum MyShared.xcframework.zip)" >> $GITHUB_ENV
-
-- name: Update Package.swift
-  run: |
-    sed -i '' "s|url: \".*xcframework.zip\"|url: \"https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/MyShared.xcframework.zip\"|" Package.swift
-    sed -i '' "s|checksum: \".*\"|checksum: \"$CHECKSUM\"|" Package.swift
-
-- name: Commit Package.swift
-  run: |
-    git config user.email "ci@github.com"
-    git config user.name "GitHub Actions"
-    git add Package.swift
-    git commit -m "chore: update Package.swift for ${{ github.ref_name }} [skip ci]"
-    git push
-```
-
-### Integration in Xcode
-
-**Option 1 — Remote (production)**
-1. In Xcode: `File → Add Package Dependencies`
-2. Enter: `https://github.com/org/repo`
-3. Select version rule → Add Package
-4. Import: `import MyShared`
-
-**Option 2 — Local (development)**
-1. In Xcode: `File → Add Package Dependencies → Add Local`
-2. Select the root folder containing `Package.swift`
-3. No checksum needed — uses local build
-
-### iOS Entry Point
-
-```kotlin
-// iosMain/MainViewController.kt
-fun MainViewController(): UIViewController = ComposeUIViewController {
-    initKoin()
-    AppTheme {
-        AppNavigation()
-    }
-}
-```
-
-### Calling from Swift
-
-```swift
-// ContentView.swift
-import SwiftUI
-import MyShared  // the wrapper product name from Package.swift
-
-struct ContentView: View {
-    var body: some View {
-        ComposeView()
-            .ignoresSafeArea(.all)
-    }
-}
-
-struct ComposeView: UIViewControllerRepresentable {
-    func makeUIViewController(context: Context) -> UIViewController {
-        MainViewControllerKt.MainViewController()
-    }
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
-}
-```
 
 ---
 
@@ -803,14 +533,17 @@ struct ComposeView: UIViewControllerRepresentable {
 
 ---
 
+## Reference Files
+
+- `references/architecture.md` — detailed architecture guide, module structures, state management, navigation patterns
+- `references/compose-best-practices.md` — composable design, state hoisting, Material 3, layouts, previews, performance
+
 ## Official References
 
 - [KMP Documentation](https://www.jetbrains.com/help/kotlin-multiplatform-dev/)
 - [Compose Multiplatform](https://www.jetbrains.com/compose-multiplatform/)
 - [Android Architecture Guide](https://developer.android.com/topic/architecture)
 - [Now in Android (Reference App)](https://github.com/android/nowinandroid)
-- [Compose Layouts](https://developer.android.com/develop/ui/compose/layouts)
-- [Compose State](https://developer.android.com/develop/ui/compose/state)
 - [Room KMP](https://developer.android.com/kotlin/multiplatform/room)
 - [DataStore KMP](https://developer.android.com/topic/libraries/architecture/datastore)
 - [Koin Multiplatform](https://insert-koin.io/docs/reference/koin-mp/kmp)
