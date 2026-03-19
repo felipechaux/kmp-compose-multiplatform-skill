@@ -25,15 +25,17 @@ Without this skill, Claude gives you generic Android advice. With it, Claude und
 | Area | Details |
 |------|---------|
 | **Architecture** | Clean Architecture with feature-based modularization (Now in Android pattern) |
-| **UI** | Compose Multiplatform, Material 3, state hoisting, previews |
-| **Navigation** | Type-safe sealed class routes, NavHostController |
-| **DI** | Koin Multiplatform — modules, ViewModels, platform DI |
-| **Networking** | Ktor client — setup, interceptors, error handling |
-| **Persistence** | Room KMP + DataStore KMP — expect/actual setup |
-| **State** | UDF pattern, StateFlow, Resource sealed class |
+| **UI** | Compose Multiplatform, Material 3, `@Stable`, state hoisting, previews |
+| **Navigation** | Type-safe sealed class routes, NavHostController, one-time navigation events |
+| **DI** | Koin Multiplatform — modules, ViewModels, scopes, platform DI |
+| **Networking** | Ktor client — auth, logging, timeout, error mapping to domain types |
+| **Persistence** | Room KMP + DataStore KMP — migrations, reactive queries, expect/actual setup |
+| **State** | UDF pattern, StateFlow, SharedFlow events, `stateIn()`, Resource sealed class |
+| **Error Handling** | Typed `AppError` hierarchy, `safeApiCall`, retry with backoff, UI error mapping |
 | **Build System** | Version catalog, BuildKonfig, KSP, convention plugins |
-| **iOS** | SPM integration, ComposeUIViewController, expect/actual |
-| **Testing** | Fakes over mocks, commonTest, coroutine testing |
+| **iOS** | SPM wrapper, ComposeUIViewController, SKIE, Swift interop, collection bridging |
+| **Testing** | Fakes + Turbine, ViewModel tests, Compose UI tests, Room in-memory, Koin teardown |
+| **Logging** | `expect`/`actual` log functions for Android (`Log`) and iOS (`NSLog`) |
 
 ## Installation
 
@@ -94,31 +96,41 @@ Using the kmp-compose-multiplatform skill, generate a Koin module for my data la
 
 | Without skill | With skill |
 |--------------|-----------|
-| Generic Android ViewModel patterns | UDF pattern with `StateFlow` and `UiState` sealed classes |
-| Android-only Room setup | Room KMP with `expect`/`actual` database builders |
-| `Hilt` / `Dagger` suggestions | Koin Multiplatform with platform-specific modules |
-| Single-platform Retrofit | Ktor client configured for `commonMain` |
+| Generic Android ViewModel patterns | UDF pattern with `StateFlow`, `SharedFlow` events, `stateIn()` |
+| Android-only Room setup | Room KMP with migrations, reactive `Flow<List<T>>` queries, `@Transaction` |
+| `Hilt` / `Dagger` suggestions | Koin Multiplatform with platform-specific modules and test teardown |
+| Single-platform Retrofit | Ktor with auth bearer, logging, timeout, and domain error mapping |
+| Raw `String` errors everywhere | Typed `AppError` sealed class with `safeApiCall` and retry logic |
 | Mixed architecture advice | Strict Clean Architecture — domain never imports data |
-| Guessed iOS integration | SPM wrapper pattern, `ComposeUIViewController`, Swift interop |
+| Guessed iOS integration | SPM wrapper, SKIE for Swift Concurrency, collection bridging, Swift naming |
+| `println()` for debugging | `expect`/`actual` log functions (`Log.d` on Android, `NSLog` on iOS) |
 
 ## Skill Content Overview
 
 The skill ([`.claude/skills/kmp-compose-multiplatform/`](.claude/skills/kmp-compose-multiplatform/)) is structured as a precise instruction set Claude follows when invoked:
 
+**`SKILL.md`** — core instruction set:
 1. **Core Principles** — Foundational rules for KMP development
 2. **Project Structure** — Module and package layout conventions
-3. **Architecture Guidelines** — Layer responsibilities, dependency rules, code examples
-4. **Compose Best Practices** — State hoisting, Material 3, modifiers, previews
-5. **Navigation** — Type-safe routing with NavHostController
+3. **Architecture Guidelines** — Layer responsibilities, dependency rules, typed error handling
+4. **Compose Best Practices** — `@Stable`, state hoisting, Material 3, modifiers, previews
+5. **Navigation** — Type-safe routing, NavHostController, `SharedFlow` navigation events
 6. **KMP Patterns** — `expect`/`actual`, source sets, platform configuration
-7. **Dependency Injection** — Koin module structure and initialization
+7. **Dependency Injection** — Koin module structure, scopes, initialization
 8. **Build System** — Version catalog, BuildKonfig, KSP setup
-9. **Data Persistence** — Room KMP and DataStore cross-platform setup
-10. **Networking** — Ktor client configuration and error handling
-11. **Testing** — Fakes over mocks, coroutine testing patterns
+9. **Data Persistence** — Room KMP (migrations, reactive queries) and DataStore
+10. **Networking** — Ktor client with auth, logging, error mapping
+11. **Logging** — `expect`/`actual` log functions (Android + iOS)
 12. **iOS Integration** — SPM, `ComposeUIViewController`, Swift interop
-13. **Common Pitfalls** — 10 mistakes to avoid in KMP projects
+13. **Common Pitfalls** — 15 mistakes to avoid in KMP projects
 14. **Official References** — Links to authoritative documentation
+
+**`references/`** — deep-dive guides:
+- `architecture.md` — module structures, state management, navigation patterns
+- `compose-best-practices.md` — `@Stable`, `derivedStateOf`, Material 3, performance
+- `error-handling.md` — `AppError` hierarchy, `safeApiCall`, retry logic, UI error mapping
+- `testing.md` — fakes, Turbine, ViewModel tests, Compose UI tests, Room in-memory, Koin teardown
+- `ios-interop.md` — Swift naming, nullability, SKIE, coroutines↔Swift Concurrency, collection bridging
 
 ## Architecture Reference
 

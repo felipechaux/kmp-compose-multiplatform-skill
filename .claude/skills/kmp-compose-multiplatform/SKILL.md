@@ -89,15 +89,17 @@ feature/
 
 ### Resource/Result Pattern
 
-Always use a sealed class for async results:
+Always use a sealed class for async results with **typed domain errors** (never raw strings):
 
 ```kotlin
 sealed class Resource<out T> {
     data class Success<out T>(val data: T) : Resource<T>()
-    data class Error(val message: String, val throwable: Throwable? = null) : Resource<Nothing>()
+    data class Error(val error: AppError) : Resource<Nothing>()
     data object Loading : Resource<Nothing>()
 }
 ```
+
+See `references/error-handling.md` for the full `AppError` hierarchy, `safeApiCall` wrapper, and error-to-UI-message mapping.
 
 ### Use Case Pattern
 
@@ -111,34 +113,90 @@ class GetUserUseCase(private val repository: UserRepository) {
 
 ### ViewModel Pattern
 
+Use `data class` UiState (not sealed class) for composable state with `_uiState.update { }`. Expose navigation events via a separate `SharedFlow`:
+
 ```kotlin
 class HomeViewModel(
-    private val generateIcebreakerUseCase: GenerateIcebreakerUseCase
+    private val getItemsUseCase: GetItemsUseCase
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow<HomeUiState>(HomeUiState.Idle)
+    private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
-    fun onGenerateClicked() {
+    // One-time navigation/event channel — never put navigation in UiState
+    private val _events = MutableSharedFlow<HomeEvent>()
+    val events: SharedFlow<HomeEvent> = _events.asSharedFlow()
+
+    fun loadItems() {
         viewModelScope.launch {
-            _uiState.value = HomeUiState.Loading
-            generateIcebreakerUseCase().collect { resource ->
-                _uiState.value = when (resource) {
-                    is Resource.Success -> HomeUiState.Success(resource.data)
-                    is Resource.Error -> HomeUiState.Error(resource.message)
-                    is Resource.Loading -> HomeUiState.Loading
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            getItemsUseCase()
+                .onSuccess { items ->
+                    _uiState.update { it.copy(isLoading = false, items = items) }
                 }
-            }
+                .onError { error ->
+                    _uiState.update { it.copy(isLoading = false, errorMessage = error.toUserMessage()) }
+                }
+        }
+    }
+
+    fun onItemClicked(id: String) {
+        viewModelScope.launch {
+            _events.emit(HomeEvent.NavigateToDetail(id))
         }
     }
 }
 
-sealed class HomeUiState {
-    data object Idle : HomeUiState()
-    data object Loading : HomeUiState()
-    data class Success(val data: IcebreakerResult) : HomeUiState()
-    data class Error(val message: String) : HomeUiState()
+// Flat data class — preferred over sealed class for composable state
+data class HomeUiState(
+    val isLoading: Boolean = false,
+    val items: List<Item> = emptyList(),
+    val errorMessage: String? = null   // human-readable, never AppError
+)
+
+// One-time events — navigation, toasts, analytics
+sealed class HomeEvent {
+    data class NavigateToDetail(val id: String) : HomeEvent()
+    data object ShowUndoSnackbar : HomeEvent()
 }
+```
+
+Collect events in the screen composable:
+
+```kotlin
+@Composable
+fun HomeScreen(
+    navController: NavHostController,
+    viewModel: HomeViewModel = koinViewModel()
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    // Collect one-time events
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is HomeEvent.NavigateToDetail -> navController.navigate(Screen.Detail.createRoute(event.id))
+                is HomeEvent.ShowUndoSnackbar -> { /* show snackbar */ }
+            }
+        }
+    }
+
+    HomeContent(uiState = uiState, onItemClick = viewModel::onItemClicked)
+}
+```
+
+### StateFlow from Repository Flow
+
+Use `stateIn()` to convert a repository `Flow` into a ViewModel `StateFlow`:
+
+```kotlin
+val uiState: StateFlow<HomeUiState> = itemsRepository.observeItems()
+    .map { items -> HomeUiState(items = items) }
+    .stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = HomeUiState(isLoading = true)
+    )
 ```
 
 ---
@@ -408,7 +466,7 @@ buildkonfig {
 
 ```kotlin
 // commonMain
-@Database(entities = [UserEntity::class], version = 1)
+@Database(entities = [UserEntity::class], version = 2)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun userDao(): UserDao
 }
@@ -420,7 +478,15 @@ actual class DatabaseBuilder actual constructor(private val context: Any?) {
     actual fun build(): AppDatabase = Room.databaseBuilder<AppDatabase>(
         context = context as Context,
         name = context.getDatabasePath("app.db").absolutePath
-    ).build()
+    )
+    .addMigrations(MIGRATION_1_2)
+    .build()
+}
+
+val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE users ADD COLUMN avatar_url TEXT")
+    }
 }
 ```
 
@@ -429,7 +495,45 @@ actual class DatabaseBuilder actual constructor(private val context: Any?) {
 actual class DatabaseBuilder actual constructor(context: Any?) {
     actual fun build(): AppDatabase = Room.databaseBuilder<AppDatabase>(
         name = NSHomeDirectory() + "/app.db"
-    ).build()
+    )
+    .addMigrations(MIGRATION_1_2)
+    .build()
+}
+```
+
+### Room DAO — Reactive Queries
+
+Always use `Flow<List<T>>` for queries that the UI observes — never return a raw `List`:
+
+```kotlin
+@Dao
+interface UserDao {
+    // Reactive — emits whenever the table changes
+    @Query("SELECT * FROM users ORDER BY name ASC")
+    fun observeAll(): Flow<List<UserEntity>>
+
+    // One-shot suspend for writes
+    @Upsert
+    suspend fun upsert(user: UserEntity)
+
+    @Delete
+    suspend fun delete(user: UserEntity)
+
+    @Query("SELECT * FROM users WHERE id = :id")
+    suspend fun getById(id: String): UserEntity?
+
+    // Transaction for atomic multi-step operations
+    @Transaction
+    suspend fun replaceAll(users: List<UserEntity>) {
+        deleteAll()
+        insertAll(users)
+    }
+
+    @Query("DELETE FROM users")
+    suspend fun deleteAll()
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAll(users: List<UserEntity>)
 }
 ```
 
@@ -450,26 +554,45 @@ internal const val DATASTORE_FILE = "app_prefs.preferences_pb"
 // commonMain
 class ApiService(private val client: HttpClient) {
 
-    suspend fun getUser(id: String): UserDto {
-        return client.get("/users/$id").body()
-    }
+    suspend fun getUser(id: String): UserDto =
+        client.get("/users/$id").body()
 
-    suspend fun createUser(request: CreateUserRequest): UserDto {
-        return client.post("/users") {
+    suspend fun createUser(request: CreateUserRequest): UserDto =
+        client.post("/users") {
             contentType(ContentType.Application.Json)
             setBody(request)
         }.body()
-    }
 }
 
-// HTTP client setup (in DI module)
-fun provideHttpClient(baseUrl: String): HttpClient = HttpClient {
+// HTTP client setup (in DI module) — with auth, logging, and retry
+fun provideHttpClient(
+    baseUrl: String,
+    tokenProvider: TokenProvider
+): HttpClient = HttpClient {
     install(ContentNegotiation) {
-        json(Json { ignoreUnknownKeys = true })
+        json(Json {
+            ignoreUnknownKeys = true
+            isLenient = true
+        })
     }
     install(HttpTimeout) {
         requestTimeoutMillis = 30_000
         connectTimeoutMillis = 15_000
+        socketTimeoutMillis = 30_000
+    }
+    install(Logging) {
+        logger = Logger.DEFAULT
+        level = LogLevel.HEADERS   // use LogLevel.BODY only in debug
+    }
+    // Auth token injection
+    install(Auth) {
+        bearer {
+            loadTokens { BearerTokens(tokenProvider.getAccessToken(), tokenProvider.getRefreshToken()) }
+            refreshTokens {
+                val newTokens = tokenProvider.refresh()
+                BearerTokens(newTokens.accessToken, newTokens.refreshToken)
+            }
+        }
     }
     defaultRequest {
         url(baseUrl)
@@ -477,6 +600,8 @@ fun provideHttpClient(baseUrl: String): HttpClient = HttpClient {
     }
 }
 ```
+
+Always wrap API calls with `safeApiCall` to map Ktor exceptions to domain errors — see `references/error-handling.md`.
 
 ---
 
@@ -518,10 +643,36 @@ class FakeUserRepository : UserRepository {
 
 ---
 
+## Logging
+
+Use `expect`/`actual` for platform logging — never use `println()` in production code:
+
+```kotlin
+// commonMain
+expect fun logDebug(tag: String, message: String)
+expect fun logError(tag: String, message: String, throwable: Throwable? = null)
+```
+
+```kotlin
+// androidMain
+actual fun logDebug(tag: String, message: String) = Log.d(tag, message)
+actual fun logError(tag: String, message: String, throwable: Throwable?) = Log.e(tag, message, throwable)
+```
+
+```kotlin
+// iosMain
+actual fun logDebug(tag: String, message: String) = NSLog("[$tag] DEBUG: $message")
+actual fun logError(tag: String, message: String, throwable: Throwable?) {
+    NSLog("[$tag] ERROR: $message ${throwable?.message ?: ""}")
+}
+```
+
+---
+
 ## Common Pitfalls to Avoid
 
 1. **Never put Android/iOS imports in `commonMain`** — use expect/actual
-2. **Never expose Flow from Room directly to UI** — map through repository to domain models
+2. **Never expose Flow from Room directly to UI** — map through repository to domain models first
 3. **Never use `LiveData` in KMP** — use `StateFlow`/`Flow` only
 4. **Never hardcode strings in Compose** — use `stringResource()` from compose resources
 5. **Never use `rememberCoroutineScope` in a ViewModel** — use `viewModelScope`
@@ -530,13 +681,21 @@ class FakeUserRepository : UserRepository {
 8. **Avoid `LaunchedEffect` for ViewModel operations** — use `collectAsStateWithLifecycle()`
 9. **Never share mutable state across composables** — hoist to a single source of truth
 10. **Do not skip the domain layer** — even for simple features, maintain the abstraction
+11. **Never use raw `String` for errors in `Resource.Error`** — use typed `AppError` sealed class
+12. **Never put navigation calls in `UiState`** — use a separate `SharedFlow<Event>` for one-time events
+13. **Never call `stopKoin()` in production code** — only in test teardown
+14. **Never use `println()` for logging** — use `expect/actual` log functions
+15. **Never skip Room migrations** — always add a `Migration` object when bumping the schema version
 
 ---
 
 ## Reference Files
 
 - `references/architecture.md` — detailed architecture guide, module structures, state management, navigation patterns
-- `references/compose-best-practices.md` — composable design, state hoisting, Material 3, layouts, previews, performance
+- `references/compose-best-practices.md` — composable design, `@Stable`, state hoisting, Material 3, layouts, previews, performance
+- `references/error-handling.md` — `AppError` hierarchy, `safeApiCall`, error mapping, retry logic, UI error display
+- `references/testing.md` — fakes, ViewModel tests with Turbine, Compose UI tests, Room in-memory, Koin test modules
+- `references/ios-interop.md` — Swift naming conventions, nullability bridging, SKIE, coroutines↔Swift Concurrency, collection bridging
 
 ## Official References
 

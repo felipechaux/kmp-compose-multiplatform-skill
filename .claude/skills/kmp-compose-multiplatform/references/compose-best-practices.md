@@ -78,18 +78,52 @@ fun HomeScreen(uiState: HomeUiState, onAction: (HomeAction) -> Unit) {
 }
 ```
 
-### 4. Use Stable Parameters
+### 4. Use Stable Parameters and @Stable
 
-Prefer stable types (primitives, data classes with val, immutable collections) to avoid unnecessary recomposition:
+The Compose compiler marks a type as **stable** if it can guarantee that `equals()` is reliable and public properties only change when `equals()` returns `false`. Unstable parameters cause unnecessary recomposition.
+
+**Stable by default:** primitives, `String`, lambdas, `data class` with all-stable properties.
+
+**Unstable by default:** `List`, `Map`, `Set` (use `kotlinx.collections.immutable` for stable collections), classes with `var` properties, abstract classes/interfaces.
 
 ```kotlin
 // GOOD — immutable list, stable
 @Composable
 fun ItemList(items: List<Item>, modifier: Modifier = Modifier) { ... }
 
-// BAD — mutable state inside composable
+// BAD — mutable list parameter
 @Composable
 fun ItemList(items: MutableList<Item>, modifier: Modifier = Modifier) { ... }
+```
+
+Mark custom classes that the compiler can't infer as stable:
+
+```kotlin
+@Stable
+data class HomeUiState(
+    val isLoading: Boolean = false,
+    val items: List<Item> = emptyList(),
+    val errorMessage: String? = null
+)
+
+// For interfaces used as composable parameters
+@Stable
+interface ItemActions {
+    fun onItemClick(id: String)
+    fun onItemDelete(id: String)
+}
+```
+
+Use `derivedStateOf` for values computed from other state — prevents recomposition when the derived value hasn't changed:
+
+```kotlin
+// GOOD — only recomposes when isButtonEnabled actually changes
+val isButtonEnabled by remember {
+    derivedStateOf { uiState.name.isNotBlank() && uiState.email.isNotBlank() }
+}
+
+// BAD — recomputes inline on every parent recomposition
+val isButtonEnabled = uiState.name.isNotBlank() && uiState.email.isNotBlank()
 ```
 
 ---
