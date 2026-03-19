@@ -40,62 +40,54 @@ Without this skill, Claude gives you generic Android advice. With it, Claude und
 ### Option 1: Project-level (recommended for KMP projects)
 
 ```bash
-mkdir -p .claude/skills
-curl -o .claude/skills/kmp-compose.md \
-  https://raw.githubusercontent.com/aldefy/kmp-compose-multiplatform-skill/main/.claude/skills/kmp-compose.md
-```
-
-Or clone and copy:
-
-```bash
 git clone https://github.com/aldefy/kmp-compose-multiplatform-skill
-cp kmp-compose-multiplatform-skill/.claude/skills/kmp-compose.md .claude/skills/
+cp -r kmp-compose-multiplatform-skill/.claude/skills/kmp-compose-multiplatform .claude/skills/
 ```
 
 ### Option 2: Global (available in all projects)
 
 ```bash
-mkdir -p ~/.claude/skills
-cp .claude/skills/kmp-compose.md ~/.claude/skills/
+git clone https://github.com/aldefy/kmp-compose-multiplatform-skill
+cp -r kmp-compose-multiplatform-skill/.claude/skills/kmp-compose-multiplatform ~/.claude/skills/
 ```
 
 ### Option 3: Git submodule
 
 ```bash
 git submodule add https://github.com/aldefy/kmp-compose-multiplatform-skill .claude/kmp-skill
-ln -s ../.claude/kmp-skill/.claude/skills/kmp-compose.md .claude/skills/kmp-compose.md
+cp -r .claude/kmp-skill/.claude/skills/kmp-compose-multiplatform .claude/skills/
 ```
 
-> **That's it.** Claude Code automatically picks up skill files from `.claude/skills/`. No configuration required.
+> **That's it.** Claude Code automatically picks up skill directories from `.claude/skills/`. No configuration required.
 
 ## Usage
 
 Once installed, invoke the skill in Claude Code:
 
 ```
-/kmp-compose
+/kmp-compose-multiplatform
 ```
 
 Or reference it inline:
 
 ```
-Using the kmp-compose skill, create a new feature module for user authentication
+Using the kmp-compose-multiplatform skill, create a new feature module for user authentication
 ```
 
 ```
-Using the kmp-compose skill, review my ViewModel for UDF violations
+Using the kmp-compose-multiplatform skill, review my ViewModel for UDF violations
 ```
 
 ```
-Using the kmp-compose skill, set up Room KMP for both Android and iOS
+Using the kmp-compose-multiplatform skill, set up Room KMP for both Android and iOS
 ```
 
 ```
-Using the kmp-compose skill, configure Ktor client with auth interceptor and error handling
+Using the kmp-compose-multiplatform skill, configure Ktor client with auth interceptor and error handling
 ```
 
 ```
-Using the kmp-compose skill, generate a Koin module for my data layer
+Using the kmp-compose-multiplatform skill, generate a Koin module for my data layer
 ```
 
 ## What Changes With This Skill
@@ -111,7 +103,7 @@ Using the kmp-compose skill, generate a Koin module for my data layer
 
 ## Skill Content Overview
 
-The main skill file [`kmp-compose.md`](.claude/skills/kmp-compose.md) is structured as a precise instruction set Claude follows when invoked:
+The skill ([`.claude/skills/kmp-compose-multiplatform/`](.claude/skills/kmp-compose-multiplatform/)) is structured as a precise instruction set Claude follows when invoked:
 
 1. **Core Principles** — Foundational rules for KMP development
 2. **Project Structure** — Module and package layout conventions
@@ -127,6 +119,125 @@ The main skill file [`kmp-compose.md`](.claude/skills/kmp-compose.md) is structu
 12. **iOS Integration** — SPM, `ComposeUIViewController`, Swift interop
 13. **Common Pitfalls** — 10 mistakes to avoid in KMP projects
 14. **Official References** — Links to authoritative documentation
+
+## iOS Integration via Swift Package Manager
+
+The recommended pattern for distributing the KMP shared module to an iOS app is a **SPM Wrapper target** — this is required because a `binaryTarget` (the compiled XCFramework) cannot declare Swift package dependencies on its own.
+
+### Package.swift Structure
+
+```swift
+// swift-tools-version: 5.9
+import PackageDescription
+
+let package = Package(
+    name: "MyShared",
+    platforms: [.iOS(.v16)],
+    products: [
+        // Expose the wrapper, not the binary directly
+        .library(name: "MyShared", targets: ["MySharedWrapper"]),
+    ],
+    dependencies: [
+        // Add Swift-only dependencies here (RevenueCat, Firebase, etc.)
+        .package(url: "https://github.com/RevenueCat/purchases-hybrid-common.git", exact: "17.32.0"),
+    ],
+    targets: [
+        // Binary target — the compiled XCFramework from Kotlin/Native
+        .binaryTarget(
+            name: "MySharedBinary",
+            url: "https://github.com/org/repo/releases/download/v1.0.0/MyShared.xcframework.zip",
+            checksum: "abc123..."  // sha256 — auto-computed in CI
+        ),
+        // Wrapper target — bridges the binary with Swift dependencies
+        .target(
+            name: "MySharedWrapper",
+            dependencies: [
+                "MySharedBinary",
+                .product(name: "PurchasesHybridCommon", package: "purchases-hybrid-common"),
+            ]
+        )
+    ]
+)
+```
+
+**Why the Wrapper pattern?**
+- `binaryTarget` cannot declare Swift package dependencies directly
+- The wrapper is an empty Swift target whose only job is to re-export the binary alongside any Swift-only dependencies
+- Your iOS app only needs to `import MyShared` — no knowledge of the wrapper internals
+
+### Integrating in Xcode
+
+**Remote (production)** — add published releases via SPM:
+1. `File → Add Package Dependencies`
+2. Enter your GitHub repo URL
+3. Select version rule → Add Package
+4. `import MyShared` in your Swift files
+
+**Local (development)** — use your local build directly:
+1. `File → Add Package Dependencies → Add Local`
+2. Select the root folder containing `Package.swift`
+3. No checksum needed — uses the local XCFramework build
+
+### iOS Entry Point
+
+```kotlin
+// iosMain/MainViewController.kt
+fun MainViewController(): UIViewController = ComposeUIViewController {
+    initKoin()
+    AppTheme { AppNavigation() }
+}
+```
+
+```swift
+// ContentView.swift
+import SwiftUI
+import MyShared
+
+struct ContentView: View {
+    var body: some View {
+        ComposeView().ignoresSafeArea(.all)
+    }
+}
+
+struct ComposeView: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> UIViewController {
+        MainViewControllerKt.MainViewController()
+    }
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
+}
+```
+
+### CI/CD — Auto-generating Package.swift
+
+Your GitHub Actions release workflow should:
+
+```yaml
+- name: Build XCFramework
+  run: ./gradlew :shared:assembleReleaseXCFramework
+
+- name: Zip XCFramework
+  run: zip -r MyShared.xcframework.zip shared/build/XCFrameworks/release/MyShared.xcframework
+
+- name: Compute checksum
+  run: echo "CHECKSUM=$(swift package compute-checksum MyShared.xcframework.zip)" >> $GITHUB_ENV
+
+- name: Update Package.swift
+  run: |
+    sed -i '' "s|url: \".*xcframework.zip\"|url: \"https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/MyShared.xcframework.zip\"|" Package.swift
+    sed -i '' "s|checksum: \".*\"|checksum: \"$CHECKSUM\"|" Package.swift
+
+- name: Commit Package.swift
+  run: |
+    git config user.email "ci@github.com"
+    git config user.name "GitHub Actions"
+    git add Package.swift
+    git commit -m "chore: update Package.swift for ${{ github.ref_name }} [skip ci]"
+    git push
+```
+
+> Never edit `Package.swift` manually — it should be generated by CI on every release.
+
+---
 
 ## Architecture Reference
 
