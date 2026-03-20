@@ -10,7 +10,7 @@ Backed by real JetBrains and Google architecture docs — not vibes.
 ![Setup time](https://img.shields.io/badge/setup-5%20min-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Compose Multiplatform](https://img.shields.io/badge/Compose%20Multiplatform-1.8.0%2B-7F52FF?logo=jetbrains)
-![Kotlin](https://img.shields.io/badge/Kotlin-2.1.0%2B-orange?logo=kotlin)
+![Kotlin](https://img.shields.io/badge/Kotlin-2.3.0%2B-orange?logo=kotlin)
 
 </div>
 
@@ -43,21 +43,21 @@ Without this skill, Claude gives you generic Android advice. With it, Claude und
 ### Option 1: Project-level (recommended for KMP projects)
 
 ```bash
-git clone https://github.com/aldefy/kmp-compose-multiplatform-skill
+git clone https://github.com/felipechaux/kmp-compose-multiplatform-skill
 cp -r kmp-compose-multiplatform-skill/.claude/skills/kmp-compose-multiplatform .claude/skills/
 ```
 
 ### Option 2: Global (available in all projects)
 
 ```bash
-git clone https://github.com/aldefy/kmp-compose-multiplatform-skill
+git clone https://github.com/felipechaux/kmp-compose-multiplatform-skill
 cp -r kmp-compose-multiplatform-skill/.claude/skills/kmp-compose-multiplatform ~/.claude/skills/
 ```
 
 ### Option 3: Git submodule
 
 ```bash
-git submodule add https://github.com/aldefy/kmp-compose-multiplatform-skill .claude/kmp-skill
+git submodule add https://github.com/felipechaux/kmp-compose-multiplatform-skill .claude/kmp-skill
 cp -r .claude/kmp-skill/.claude/skills/kmp-compose-multiplatform .claude/skills/
 ```
 
@@ -324,7 +324,7 @@ Your GitHub Actions release workflow should:
 | DateTime | kotlinx-datetime | 0.6.1+ |
 | Serialization | kotlinx-serialization | 1.7.3+ |
 | Config | BuildKonfig | 0.17.1+ |
-| Code gen | KSP | 2.1.0+ |
+| Code gen | KSP | 2.3.0+ |
 
 ## Examples
 
@@ -357,6 +357,9 @@ This skill is grounded in official, production-tested documentation:
 - [Navigation Compose](https://developer.android.com/guide/navigation/design/kotlin-dsl)
 - [Compose State Guide](https://developer.android.com/develop/ui/compose/state)
 - [Compose Layouts](https://developer.android.com/develop/ui/compose/layouts)
+- [Compose Multiplatform Resources (i18n)](https://www.jetbrains.com/help/kotlin-multiplatform-dev/compose-multiplatform-resources-usage.html)
+- [Predictive Back Gesture](https://developer.android.com/guide/navigation/custom-back/predictive-back-gesture)
+- [Paging 3](https://developer.android.com/topic/libraries/architecture/paging/v3-overview)
 
 ## Contributing
 
