@@ -379,6 +379,172 @@ val isDebug = BuildKonfig.IS_DEBUG
 
 ---
 
+## R8 / ProGuard Configuration (Android)
+
+Keep rules are required for Ktor, Room, and Koin in release builds. Add to `android/proguard-rules.pro`:
+
+```proguard
+# Ktor — keep serialization metadata
+-keep class io.ktor.** { *; }
+-keep class kotlinx.serialization.** { *; }
+-keepattributes *Annotation*, InnerClasses
+-dontnote kotlinx.serialization.AnnotationsKt
+-keepclassmembers class ** {
+    @kotlinx.serialization.Serializable *;
+}
+
+# Room — keep generated _Impl classes
+-keep class * extends androidx.room.RoomDatabase
+-keep @androidx.room.Entity class *
+-dontwarn androidx.room.paging.**
+
+# Koin — keep module declarations
+-keep class org.koin.** { *; }
+-keepnames class * extends org.koin.core.module.Module
+
+# Kotlin reflection (used by Koin)
+-keep class kotlin.Metadata { *; }
+-keepclassmembers class ** {
+    @kotlin.jvm.JvmField *;
+    @kotlin.jvm.JvmStatic *;
+}
+
+# DataStore
+-keep class androidx.datastore.** { *; }
+
+# Coroutines
+-keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
+-keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
+```
+
+Enable R8 full mode for better size reduction (requires more explicit keeps):
+
+```kotlin
+// android/build.gradle.kts
+android {
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+}
+```
+
+```properties
+# gradle.properties — enable R8 full mode
+android.enableR8.fullMode=true
+```
+
+---
+
+## Publishing to Maven (Local and Remote)
+
+### Local Maven (for local multi-repo development)
+
+```kotlin
+// shared/build.gradle.kts
+plugins {
+    id("maven-publish")
+}
+
+afterEvaluate {
+    publishing {
+        publications {
+            create<MavenPublication>("release") {
+                groupId = "com.example"
+                artifactId = "shared"
+                version = "1.0.0"
+                from(components["kotlin"])
+            }
+        }
+        repositories {
+            maven {
+                name = "LocalMaven"
+                url = uri("${rootProject.buildDir}/local-maven")
+            }
+        }
+    }
+}
+```
+
+```bash
+# Publish to local Maven repo
+./gradlew :shared:publishReleasePublicationToLocalMavenRepository
+
+# Consume from local Maven in another project
+repositories {
+    maven { url = uri("/path/to/local-maven") }
+}
+```
+
+### Publishing to GitHub Packages (CI)
+
+```kotlin
+// shared/build.gradle.kts
+publishing {
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/ORG/REPO")
+            credentials {
+                username = System.getenv("GITHUB_ACTOR")
+                password = System.getenv("GITHUB_TOKEN")
+            }
+        }
+    }
+}
+```
+
+```yaml
+# .github/workflows/publish.yml
+- name: Publish to GitHub Packages
+  run: ./gradlew :shared:publish
+  env:
+    GITHUB_ACTOR: ${{ github.actor }}
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+---
+
+## CI Gradle Daemon Configuration
+
+Disable the Gradle daemon in CI to avoid warm-up overhead and avoid orphaned daemon processes:
+
+```properties
+# gradle.properties (CI override via environment or -P flag)
+# In CI, set via: ./gradlew -Dorg.gradle.daemon=false
+org.gradle.daemon=false
+```
+
+Or set in CI workflow:
+
+```yaml
+# GitHub Actions — disable daemon and configure memory for CI
+env:
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dkotlin.incremental=false -Dorg.gradle.jvmargs=-Xmx4g"
+```
+
+Use Gradle's built-in caching in GitHub Actions:
+
+```yaml
+- name: Setup Gradle
+  uses: gradle/actions/setup-gradle@v4
+  with:
+    cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+
+- name: Build
+  run: ./gradlew :shared:assembleRelease
+```
+
+This caches the Gradle home directory, build cache, and configuration cache between runs — significantly speeds up CI.
+
+---
+
 ## Build Performance Tips
 
 1. **Enable build cache** — `org.gradle.caching=true` in `gradle.properties`
@@ -387,9 +553,12 @@ val isDebug = BuildKonfig.IS_DEBUG
 4. **Avoid `implementation` in `api`** — Use `api()` only for types exposed in public signatures
 5. **Use `compileOnly`** for annotation processors that don't need to be on runtime classpath
 6. **Prefer `testImplementation`** over `implementation` for test-only deps
+7. **Disable daemon in CI** — `org.gradle.daemon=false` via `GRADLE_OPTS` environment variable
+8. **Use `--no-configuration-cache` selectively** — some third-party plugins are not configuration-cache compatible yet; add them to the incompatible task list rather than disabling globally
 
 Check build health with:
 ```bash
 ./gradlew buildHealth          # dependency analysis
 ./gradlew :shared:dependencies # inspect dependency tree
+./gradlew --profile            # generate HTML build performance report
 ```

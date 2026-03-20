@@ -225,6 +225,139 @@ fun HomeContent(
 
 ---
 
+## Recoverable vs Fatal Error Classification
+
+Not all errors are equal — classify them to drive the right UI response:
+
+```kotlin
+// Extend AppError with recoverability metadata
+val AppError.isRecoverable: Boolean get() = when (this) {
+    is AppError.Network.NoConnection -> true    // user can re-enable wifi
+    is AppError.Network.Timeout -> true         // user can retry
+    is AppError.Network.ServerError -> code in 500..599  // server-side, worth retrying
+    is AppError.Network.Unauthorized -> false   // must re-authenticate
+    is AppError.Database.ReadFailure -> false   // data corruption — escalate
+    is AppError.Database.WriteFailure -> true   // may succeed on retry
+    is AppError.Database.NotFound -> false      // no point retrying
+    is AppError.Validation -> false             // user input issue — don't retry automatically
+    is AppError.Unexpected -> false             // unknown — treat as fatal
+    else -> false
+}
+
+val AppError.isFatal: Boolean get() = !isRecoverable
+```
+
+Use `isFatal` to decide whether to show a retry button or navigate to an error screen:
+
+```kotlin
+fun AppError.toUiAction(): ErrorAction = when {
+    isRecoverable -> ErrorAction.ShowRetry
+    this is AppError.Network.Unauthorized -> ErrorAction.NavigateToLogin
+    isFatal -> ErrorAction.ShowFatalDialog
+    else -> ErrorAction.ShowRetry
+}
+
+sealed class ErrorAction {
+    data object ShowRetry : ErrorAction()
+    data object NavigateToLogin : ErrorAction()
+    data object ShowFatalDialog : ErrorAction()
+}
+```
+
+---
+
+## 429 Rate Limiting
+
+Handle `429 Too Many Requests` separately from other server errors — back off and retry after the `Retry-After` header:
+
+```kotlin
+suspend fun <T> safeApiCall(call: suspend () -> T): Resource<T> {
+    return try {
+        Resource.Success(call())
+    } catch (e: ClientRequestException) {
+        val error = when (e.response.status) {
+            HttpStatusCode.Unauthorized -> AppError.Network.Unauthorized()
+            HttpStatusCode.TooManyRequests -> {
+                // Respect Retry-After header if present
+                val retryAfter = e.response.headers["Retry-After"]?.toLongOrNull() ?: 60L
+                delay(retryAfter * 1000L)
+                return safeApiCall(call)  // single retry after back-off
+            }
+            HttpStatusCode.NotFound -> AppError.Database.NotFound
+            else -> AppError.Network.ServerError(e.response.status.value, e.response.toString())
+        }
+        Resource.Error(error)
+    }
+    // ... other catch blocks
+}
+```
+
+In Ktor `HttpRequestRetry`, exclude 429 from default server-error retry (handle it manually above):
+
+```kotlin
+install(HttpRequestRetry) {
+    retryIf(maxRetries = 3) { _, response ->
+        response.status.value in 500..599 && response.status != HttpStatusCode.TooManyRequests
+    }
+    exponentialDelay(base = 2.0, maxDelayMs = 10_000, randomizationMs = 500)
+}
+```
+
+---
+
+## Error Analytics and Breadcrumbs
+
+Record non-fatal errors and add contextual breadcrumbs before sending to crash services:
+
+```kotlin
+interface ErrorReporter {
+    fun recordError(error: AppError, context: Map<String, String> = emptyMap())
+    fun addBreadcrumb(message: String, category: String = "app")
+}
+
+// androidMain
+class FirebaseErrorReporter : ErrorReporter {
+    private val crashlytics = FirebaseCrashlytics.getInstance()
+
+    override fun recordError(error: AppError, context: Map<String, String>) {
+        // Attach context as custom keys — visible in Crashlytics dashboard
+        context.forEach { (key, value) -> crashlytics.setCustomKey(key, value) }
+        crashlytics.setCustomKey("error_type", error::class.simpleName ?: "Unknown")
+        if (error is AppError.Network.ServerError) {
+            crashlytics.setCustomKey("http_code", error.code)
+        }
+        if (error.isFatal) {
+            crashlytics.recordException(error)
+        } else {
+            crashlytics.log("Non-fatal error: ${error::class.simpleName}")
+        }
+    }
+
+    override fun addBreadcrumb(message: String, category: String) {
+        crashlytics.log("[$category] $message")
+    }
+}
+```
+
+Use in the ViewModel — record before mapping to user message:
+
+```kotlin
+fun loadItems() {
+    viewModelScope.launch {
+        errorReporter.addBreadcrumb("Loading items", "home")
+        getItemsUseCase().onError { error ->
+            errorReporter.recordError(error, mapOf(
+                "screen" to "home",
+                "action" to "loadItems"
+            ))
+            _uiState.update { it.copy(errorMessage = error.toUserMessage()) }
+        }
+    }
+}
+```
+
+---
+
 ## Retry Logic
 
 For use cases that should support retry (e.g., network-dependent operations):

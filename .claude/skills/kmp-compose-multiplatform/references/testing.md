@@ -359,6 +359,271 @@ class HomeScreenTest {
 
 ---
 
+## Accessibility Testing
+
+Test that composables expose correct semantics for screen readers:
+
+```kotlin
+@RunWith(AndroidJUnit4::class)
+class HomeScreenAccessibilityTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Test
+    fun favoriteButton_hasCorrectContentDescription() {
+        composeTestRule.setContent {
+            AppTheme {
+                ItemCard(
+                    item = Item(id = "1", title = "My Item", isFavorite = false),
+                    onFavoriteClick = {}
+                )
+            }
+        }
+
+        composeTestRule
+            .onNodeWithContentDescription("Add to favorites")
+            .assertIsDisplayed()
+            .assertHasClickAction()
+    }
+
+    @Test
+    fun loadingIndicator_hasAccessibleDescription() {
+        composeTestRule.setContent {
+            AppTheme {
+                HomeContent(uiState = HomeUiState(isLoading = true), onRetry = {})
+            }
+        }
+
+        composeTestRule
+            .onNodeWithContentDescription("Loading")
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun errorState_retryButtonIsAccessible() {
+        composeTestRule.setContent {
+            AppTheme {
+                HomeContent(
+                    uiState = HomeUiState(errorMessage = "No connection"),
+                    onRetry = {}
+                )
+            }
+        }
+
+        composeTestRule
+            .onNodeWithText("Retry")
+            .assertHasClickAction()
+            .assertIsEnabled()
+    }
+
+    @Test
+    fun mergedSemantics_cardExposesCorrectDescription() {
+        val item = Item(id = "1", title = "Alice", subtitle = "Engineer")
+
+        composeTestRule.setContent {
+            AppTheme { UserCard(user = item) }
+        }
+
+        // Merged semantics should produce one accessible node
+        composeTestRule
+            .onNodeWithContentDescription("Alice, Engineer", substring = true)
+            .assertExists()
+    }
+}
+```
+
+---
+
+## SharedFlow Event Testing
+
+Test one-time navigation/UI events emitted via `SharedFlow`:
+
+```kotlin
+// commonTest/feature/home/presentation/viewmodel/HomeViewModelEventTest.kt
+class HomeViewModelEventTest {
+
+    private val repository = FakeUserRepository()
+    private val viewModel = HomeViewModel(GetItemsUseCase(repository))
+
+    @BeforeTest
+    fun setup() {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+    }
+
+    @AfterTest
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
+    @Test
+    fun `onItemClicked emits NavigateToDetail event`() = runTest {
+        viewModel.events.test {
+            viewModel.onItemClicked("item-123")
+
+            val event = awaitItem()
+            assertIs<HomeEvent.NavigateToDetail>(event)
+            assertEquals("item-123", event.id)
+
+            cancelAndConsumeRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `delete action emits ShowUndoSnackbar event`() = runTest {
+        viewModel.events.test {
+            viewModel.onDeleteItem("item-456")
+
+            val event = awaitItem()
+            assertIs<HomeEvent.ShowUndoSnackbar>(event)
+        }
+    }
+
+    @Test
+    fun `multiple events are emitted in order`() = runTest {
+        viewModel.events.test {
+            viewModel.onItemClicked("first")
+            viewModel.onItemClicked("second")
+
+            assertEquals("first", (awaitItem() as HomeEvent.NavigateToDetail).id)
+            assertEquals("second", (awaitItem() as HomeEvent.NavigateToDetail).id)
+        }
+    }
+}
+```
+
+---
+
+## Paging 3 Tests
+
+Test `PagingData` streams using `paging-testing` artifact:
+
+```kotlin
+// androidUnitTest/feature/home/data/repository/ItemRepositoryPagingTest.kt
+@RunWith(AndroidJUnit4::class)
+class ItemRepositoryPagingTest {
+
+    private val fakeDao = FakeItemDao()
+    private val repository = ItemRepositoryImpl(fakeDao)
+
+    @Test
+    fun pagingSource_loadsFirstPage() = runTest {
+        // Seed fake DAO with 50 items
+        repeat(50) { i -> fakeDao.insert(ItemEntity(id = "item-$i", title = "Item $i")) }
+
+        val pager = Pager(
+            config = PagingConfig(pageSize = 20, enablePlaceholders = false),
+            pagingSourceFactory = { fakeDao.pagingSource() }
+        )
+
+        val snapshot = pager.flow
+            .asSnapshot()  // from paging-testing — collects and waits for first page
+
+        assertEquals(20, snapshot.size)
+        assertEquals("item-0", snapshot.first().id)
+    }
+
+    @Test
+    fun pagingSource_loadsAllItems_withScrolling() = runTest {
+        repeat(45) { i -> fakeDao.insert(ItemEntity(id = "item-$i", title = "Item $i")) }
+
+        val snapshot = Pager(
+            config = PagingConfig(pageSize = 20),
+            pagingSourceFactory = { fakeDao.pagingSource() }
+        ).flow.asSnapshot {
+            scrollTo(index = 44)  // scroll to trigger all pages to load
+        }
+
+        assertEquals(45, snapshot.size)
+    }
+}
+```
+
+---
+
+## Screenshot / Golden Tests
+
+Use Paparazzi (Android) or Roborazzi for composable screenshot regression tests:
+
+```toml
+# libs.versions.toml
+paparazzi = "1.3.5"
+[plugins]
+paparazzi = { id = "app.cash.paparazzi", version.ref = "paparazzi" }
+```
+
+```kotlin
+// androidUnitTest/feature/home/HomeScreenScreenshotTest.kt
+@RunWith(JUnit4::class)
+class HomeScreenScreenshotTest {
+
+    @get:Rule
+    val paparazzi = Paparazzi(
+        deviceConfig = DeviceConfig.PIXEL_5,
+        theme = "android:Theme.Material.Light.NoActionBar"
+    )
+
+    @Test
+    fun homeScreen_loadingState() {
+        paparazzi.snapshot {
+            AppTheme {
+                HomeContent(
+                    uiState = HomeUiState(isLoading = true),
+                    onAction = {}
+                )
+            }
+        }
+    }
+
+    @Test
+    fun homeScreen_successState() {
+        paparazzi.snapshot {
+            AppTheme {
+                HomeContent(
+                    uiState = HomeUiState(items = PreviewData.items),
+                    onAction = {}
+                )
+            }
+        }
+    }
+
+    @Test
+    fun homeScreen_errorState() {
+        paparazzi.snapshot {
+            AppTheme {
+                HomeContent(
+                    uiState = HomeUiState(errorMessage = "No internet connection"),
+                    onRetry = {}
+                )
+            }
+        }
+    }
+
+    @Test
+    fun homeScreen_darkTheme() {
+        paparazzi.snapshot {
+            AppTheme(darkTheme = true) {
+                HomeContent(
+                    uiState = HomeUiState(items = PreviewData.items),
+                    onAction = {}
+                )
+            }
+        }
+    }
+}
+```
+
+Run golden comparison:
+```bash
+# Record golden images (first run or after intentional UI changes)
+./gradlew :shared:recordPaparazziDebug
+
+# Verify screenshots match goldens (CI)
+./gradlew :shared:verifyPaparazziDebug
+```
+
+---
+
 ## Koin Test Modules
 
 ```kotlin

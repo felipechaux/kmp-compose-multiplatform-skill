@@ -331,6 +331,164 @@ actual fun logError(tag: String, message: String, throwable: Throwable?) {
 
 ---
 
+## SKIE — Sealed Class Edge Cases
+
+SKIE converts Kotlin sealed classes to Swift enums, but there are important edge cases:
+
+### Generic Sealed Classes
+
+SKIE cannot convert sealed classes with generic type parameters to exhaustive Swift enums. Avoid generics in sealed classes exposed to iOS:
+
+```kotlin
+// AVOID — SKIE cannot generate exhaustive Swift enum for this
+sealed class Result<T> {
+    data class Success<T>(val data: T) : Result<T>()
+    data class Error<T>(val error: String) : Result<T>()
+}
+
+// PREFER — use concrete types at the iOS API boundary
+sealed class UserResult {
+    data class Success(val user: User) : UserResult()
+    data class Error(val message: String) : UserResult()
+}
+```
+
+### Nested Sealed Classes
+
+SKIE flattens nested sealed hierarchies. Deeply nested classes like `AppError.Network.NoConnection` become `AppErrorNetworkNoConnection` in Swift — document this mapping:
+
+```kotlin
+// Kotlin
+sealed class AuthState {
+    data object Loading : AuthState()
+    data class Authenticated(val token: String) : AuthState()
+    sealed class Error : AuthState() {
+        data object InvalidCredentials : Error()
+        data object NetworkError : Error()
+    }
+}
+```
+
+```swift
+// With SKIE — switch cases
+switch state {
+case .loading: showSpinner()
+case .authenticated(let token): storeToken(token)
+case .errorInvalidCredentials: showLoginError()
+case .errorNetworkError: showNetworkError()
+// Note: Error subclass prefix is added to distinguish nested cases
+}
+```
+
+### Skipping SKIE for Specific Types
+
+Opt out of SKIE transformation for specific types using `@SealedInterop.Disabled`:
+
+```kotlin
+@SealedInterop.Disabled
+sealed class InternalEvent {  // not exposed to Swift — kept as class hierarchy
+    class ItemAdded(val id: String) : InternalEvent()
+}
+```
+
+---
+
+## Kotlin/Native Memory Model
+
+Kotlin/Native uses the **new memory model** (default since Kotlin 1.7.20) which removes the strict object freeze requirement. Key implications:
+
+1. **Mutable state CAN be shared across threads** — but you must still synchronize access explicitly
+2. **No more `InvalidMutabilityException`** — objects are no longer frozen automatically
+3. **Use `AtomicReference` for thread-safe state** in `iosMain`:
+
+```kotlin
+// iosMain — thread-safe shared mutable reference
+import kotlin.native.concurrent.AtomicReference
+
+class SharedCounter {
+    private val _count = AtomicReference(0)
+
+    fun increment() {
+        _count.value++
+    }
+
+    fun get(): Int = _count.value
+}
+```
+
+4. **Coroutines on iOS** — always use `Dispatchers.Main` for UI updates; background work uses `Dispatchers.Default` (maps to a background thread pool):
+
+```kotlin
+// iosMain — correct dispatcher usage
+actual fun platformModule(): Module = module {
+    single<CoroutineDispatcher> { Dispatchers.Main }
+}
+```
+
+5. **GC differences** — Kotlin/Native uses a different GC than JVM. Avoid creating large object graphs that reference each other across thread boundaries; prefer passing data by value (data classes) over references.
+
+6. **Objective-C object lifecycle** — When bridging to Swift, Kotlin objects retain their reference count. Avoid circular references between Kotlin and Swift objects — use `weak` on the Swift side:
+
+```swift
+class HomeViewController: UIViewController {
+    // Weak reference prevents retain cycle with Kotlin ViewModel
+    private weak var viewModel: HomeViewModelIos?
+}
+```
+
+---
+
+## iOS Performance Considerations
+
+1. **`isStatic = true` for frameworks** — always use static frameworks for iOS to avoid dynamic linking overhead:
+
+```kotlin
+iosArm64 {
+    binaries.framework {
+        baseName = "shared"
+        isStatic = true  // required for App Store; avoids dyld loading cost
+    }
+}
+```
+
+2. **Minimize Kotlin↔Swift boundary crossings in hot paths** — each call across the boundary incurs overhead (ObjC message dispatch). Batch data instead of iterating Kotlin collections from Swift:
+
+```kotlin
+// GOOD — one call, returns all data
+fun getItems(): List<Item> = repository.getAllCached()
+
+// BAD in a loop — each call crosses the Kotlin/ObjC boundary
+// Swift: for i in 0..<viewModel.itemCount { let item = viewModel.getItem(i) }
+```
+
+3. **Avoid suspending functions that return `Unit` to Swift** — prefer callback-based APIs at iOS boundaries (or use SKIE):
+
+```kotlin
+// iosMain — iOS-friendly callback API for Swift that doesn't use SKIE
+fun loadData(onResult: (List<Item>) -> Unit, onError: (String) -> Unit) {
+    CoroutineScope(Dispatchers.Main).launch {
+        when (val result = repository.getItems()) {
+            is Resource.Success -> onResult(result.data)
+            is Resource.Error -> onError(result.error.toUserMessage())
+            is Resource.Loading -> {}
+        }
+    }
+}
+```
+
+4. **XCFramework size** — enable Bitcode and LLVM optimizations in release builds:
+
+```kotlin
+iosArm64 {
+    binaries.framework {
+        freeCompilerArgs += listOf("-Xoptimization-passes=2")
+        optimized = true  // enables dead code elimination
+    }
+}
+```
+
+---
+
 ## Public iOS API Design Guidelines
 
 When exposing Kotlin APIs to Swift/iOS:

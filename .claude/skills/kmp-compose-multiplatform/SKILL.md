@@ -326,6 +326,97 @@ val homeModule = module {
 }
 ```
 
+### Scopes — Feature-Scoped Dependencies
+
+Use Koin scopes for dependencies that should live only as long as a feature/screen is active (e.g., a shopping cart, a multi-step form):
+
+```kotlin
+// Define a scope qualifier
+val CartScope = named("CartScope")
+
+val cartModule = module {
+    // Scoped — one instance per CartScope lifecycle
+    scope(CartScope) {
+        scoped { CartRepository(get()) }
+        scoped { CartViewModel(get()) }
+    }
+}
+
+// Open scope when entering the feature
+val cartScope = getKoin().createScope("cart_session", CartScope)
+val cartViewModel = cartScope.get<CartViewModel>()
+
+// Close scope when leaving — instance is garbage collected
+cartScope.close()
+```
+
+### Lazy Injection
+
+Use `inject()` (lazy delegation) instead of `get()` (eager) when the dependency may not be needed immediately:
+
+```kotlin
+class HomeViewModel : ViewModel() {
+    private val analyticsService: AnalyticsService by inject()   // lazy
+    private val repository: HomeRepository = get()               // eager
+}
+```
+
+### Named Qualifiers
+
+Use `named()` qualifiers when you need multiple instances of the same type in the same module — a common pattern for multiple API clients or dispatchers:
+
+```kotlin
+val networkModule = module {
+    // Two HTTP clients with different base URLs, distinguished by name
+    single<HttpClient>(named("main")) {
+        provideHttpClient(baseUrl = BuildKonfig.API_BASE_URL, tokenProvider = get())
+    }
+    single<HttpClient>(named("auth")) {
+        provideHttpClient(baseUrl = BuildKonfig.AUTH_BASE_URL, tokenProvider = get())
+    }
+
+    // Multiple dispatchers
+    single<CoroutineDispatcher>(named("io")) { Dispatchers.IO }
+    single<CoroutineDispatcher>(named("main")) { Dispatchers.Main }
+}
+
+// Inject by name
+class UserRepository(
+    private val mainClient: HttpClient = get(named("main")),
+    private val authClient: HttpClient = get(named("auth"))
+)
+```
+
+### ViewModel with SavedStateHandle
+
+Bind `SavedStateHandle` in Koin using `viewModelOf` or the `params` API:
+
+```kotlin
+// Using viewModelOf — automatically injects SavedStateHandle
+val featureModule = module {
+    viewModelOf(::DetailViewModel)  // SavedStateHandle injected automatically
+}
+
+// Or manually via params
+val featureModule = module {
+    viewModel { params ->
+        DetailViewModel(
+            savedStateHandle = params.get(),
+            getItemUseCase = get()
+        )
+    }
+}
+```
+
+```kotlin
+class DetailViewModel(
+    savedStateHandle: SavedStateHandle,
+    private val getItemUseCase: GetItemUseCase
+) : ViewModel() {
+    private val itemId: String = checkNotNull(savedStateHandle[Screen.Detail.ARG_ID])
+}
+```
+
 ### Central Module Aggregator
 
 ```kotlin
@@ -537,6 +628,76 @@ interface UserDao {
 }
 ```
 
+### Room Pagination with Paging 3
+
+For large datasets use `PagingSource` — never load everything into memory:
+
+```toml
+# libs.versions.toml
+paging = "3.3.6"
+[libraries]
+paging-runtime = { module = "androidx.paging:paging-runtime", version.ref = "paging" }
+paging-compose = { module = "androidx.paging:paging-compose", version.ref = "paging" }
+paging-testing = { module = "androidx.paging:paging-testing", version.ref = "paging" }
+```
+
+```kotlin
+// DAO — return PagingSource instead of List
+@Dao
+interface ItemDao {
+    @Query("SELECT * FROM items ORDER BY created_at DESC")
+    fun pagingSource(): PagingSource<Int, ItemEntity>
+}
+
+// Repository
+fun observeItemsPaged(): Flow<PagingData<Item>> = Pager(
+    config = PagingConfig(pageSize = 20, enablePlaceholders = false),
+    pagingSourceFactory = { itemDao.pagingSource() }
+).flow.map { pagingData -> pagingData.map { it.toDomain() } }
+
+// ViewModel
+val pagedItems: Flow<PagingData<Item>> = itemsRepository
+    .observeItemsPaged()
+    .cachedIn(viewModelScope)
+
+// Composable
+@Composable
+fun ItemListScreen(viewModel: HomeViewModel = koinViewModel()) {
+    val items = viewModel.pagedItems.collectAsLazyPagingItems()
+
+    LazyColumn {
+        items(count = items.itemCount, key = items.itemKey { it.id }) { index ->
+            items[index]?.let { ItemCard(item = it) }
+        }
+        item {
+            when (items.loadState.append) {
+                is LoadState.Loading -> CircularProgressIndicator()
+                is LoadState.Error -> RetryButton(onClick = { items.retry() })
+                else -> Unit
+            }
+        }
+    }
+}
+```
+
+### Room Full-Text Search (FTS)
+
+```kotlin
+@Fts4(contentEntity = ItemEntity::class)
+@Entity(tableName = "items_fts")
+data class ItemFtsEntity(
+    @PrimaryKey @ColumnInfo(name = "rowid") val rowId: Int = 0,
+    val title: String,
+    val description: String
+)
+
+@Dao
+interface ItemSearchDao {
+    @Query("SELECT * FROM items WHERE rowid IN (SELECT rowid FROM items_fts WHERE items_fts MATCH :query)")
+    fun search(query: String): Flow<List<ItemEntity>>
+}
+```
+
 ### DataStore Setup
 
 ```kotlin
@@ -609,6 +770,146 @@ fun provideHttpClient(
 
 Always wrap API calls with `safeApiCall` to map Ktor exceptions to domain errors — see `references/error-handling.md`.
 
+### Exponential Backoff with Jitter
+
+Add randomization to retry delays to prevent thundering-herd problems when many clients retry simultaneously:
+
+```kotlin
+install(HttpRequestRetry) {
+    retryOnServerErrors(maxRetries = 3)
+    retryOnException(maxRetries = 3, retryOnTimeout = true)
+    // Add jitter: randomize delay within ±500ms of calculated backoff
+    exponentialDelay(base = 2.0, maxDelayMs = 10_000, randomizationMs = 500)
+}
+```
+
+### Certificate Pinning (Android)
+
+For high-security apps, pin the server's certificate to prevent MITM attacks:
+
+```kotlin
+// androidMain — OkHttp CertificatePinner
+actual fun createHttpClient(baseUrl: String, tokenProvider: TokenProvider): HttpClient =
+    HttpClient(OkHttp) {
+        engine {
+            config {
+                certificatePinner(
+                    CertificatePinner.Builder()
+                        .add("api.example.com", "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+                        .add("api.example.com", "sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=") // backup pin
+                        .build()
+                )
+            }
+        }
+        // ... other config
+    }
+```
+
+> Keep two pins active at all times (primary + backup) to allow certificate rotation without a forced update.
+
+### SharedFlow Buffer Strategy
+
+Choose buffer size and overflow behavior explicitly when emitting from multiple coroutines:
+
+```kotlin
+// One-time UI events (navigation, toasts) — no replay, drop oldest if consumer is slow
+private val _events = MutableSharedFlow<HomeEvent>(
+    replay = 0,
+    extraBufferCapacity = 64,
+    onBufferOverflow = BufferOverflow.DROP_OLDEST
+)
+
+// App-wide events (logout, session expiry) — replay 1 so late subscribers catch the event
+private val _appEvents = MutableSharedFlow<AppEvent>(
+    replay = 1,
+    extraBufferCapacity = 16,
+    onBufferOverflow = BufferOverflow.DROP_OLDEST
+)
+```
+
+Never use `replay > 0` for navigation events — a screen re-subscribing would navigate again.
+
+### HTTP Caching
+
+Enable response caching in the Ktor client to reduce network calls and support offline reading:
+
+```kotlin
+// androidMain — OkHttp cache
+actual fun createHttpClient(baseUrl: String, tokenProvider: TokenProvider): HttpClient =
+    HttpClient(OkHttp) {
+        engine {
+            config {
+                cache(Cache(
+                    directory = context.cacheDir.resolve("http_cache"),
+                    maxSize = 10L * 1024 * 1024  // 10 MB
+                ))
+            }
+        }
+        // ... other plugins
+    }
+```
+
+For stale-while-revalidate behaviour, add headers in repository calls:
+
+```kotlin
+suspend fun getItems(): Resource<List<ItemDto>> = safeApiCall {
+    client.get("/items") {
+        header(HttpHeaders.CacheControl, "max-age=300")   // fresh for 5 min
+    }.body()
+}
+```
+
+### OAuth 2.0 Token Refresh
+
+The Ktor `Auth` plugin handles token rotation automatically. Ensure the refresh call itself is unauthenticated to avoid infinite loops:
+
+```kotlin
+install(Auth) {
+    bearer {
+        loadTokens {
+            BearerTokens(tokenStorage.accessToken, tokenStorage.refreshToken)
+        }
+        refreshTokens {
+            // markAsRefreshTokenRequest() prevents Auth plugin re-intercepting this call
+            val response = client.post("/auth/refresh") {
+                markAsRefreshTokenRequest()
+                setBody(RefreshRequest(oldTokens?.refreshToken ?: ""))
+            }.body<TokenResponse>()
+
+            tokenStorage.save(response.accessToken, response.refreshToken)
+            BearerTokens(response.accessToken, response.refreshToken)
+        }
+        sendWithoutRequest { request ->
+            request.url.host == "api.example.com"   // only attach token to your API
+        }
+    }
+}
+
+---
+
+## Internationalization (i18n)
+
+All user-facing strings must use Compose Multiplatform's resource system. Never hardcode text:
+
+```kotlin
+// GOOD — uses generated Res.string references
+Text(text = stringResource(Res.string.home_title, userName))
+Button(onClick = onRetry) { Text(text = stringResource(Res.string.action_retry)) }
+
+// BAD — hardcoded, not translatable
+Text(text = "Welcome, $userName")
+```
+
+Key rules:
+- Define all strings in `commonMain/composeResources/values/strings.xml`
+- Add locale folders (`values-es/`, `values-ar/`) for each supported language
+- Use `pluralStringResource()` for quantities — never `if (count == 1)` string branching
+- Use `start`/`end` padding (not `left`/`right`) for RTL language support
+- Use `Icons.AutoMirrored.*` for directional icons that should flip in RTL
+- Test with `@Preview(locale = "ar")` to verify RTL layouts
+
+See `references/i18n.md` for plurals, RTL testing, dynamic locale change, and locale-aware number/currency formatting.
+
 ---
 
 ## Testing Strategy
@@ -672,10 +973,36 @@ actual fun logError(tag: String, message: String, throwable: Throwable?) =
     Timber.tag(tag).e(throwable, message)
 ```
 
-Initialize Timber in `Application.onCreate()`:
+Initialize Timber in `Application.onCreate()` — plant a `DebugTree` for debug builds and a **Crashlytics reporting tree** for production:
+
 ```kotlin
-if (BuildConfig.DEBUG) Timber.plant(Timber.DebugTree())
-// In production, plant a crash reporting tree (Crashlytics, etc.)
+class MyApp : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        if (BuildKonfig.IS_DEBUG) {
+            Timber.plant(Timber.DebugTree())
+        } else {
+            Timber.plant(CrashlyticsTree())
+        }
+    }
+}
+
+// Production tree — routes WARN/ERROR to Firebase Crashlytics
+class CrashlyticsTree : Timber.Tree() {
+    override fun log(priority: Int, tag: String?, message: String, t: Throwable?) {
+        // Only forward warnings and errors to crash reporting
+        if (priority < Log.WARN) return
+        // Never log sensitive data — scrub before sending
+        val safeMessage = message.redactSensitivePatterns()
+        FirebaseCrashlytics.getInstance().log("[$tag] $safeMessage")
+        if (t != null) FirebaseCrashlytics.getInstance().recordException(t)
+    }
+}
+
+// Redact tokens, emails, phone numbers before sending to crash services
+private fun String.redactSensitivePatterns(): String = this
+    .replace(Regex("Bearer [A-Za-z0-9\\-._~+/]+=*"), "Bearer [REDACTED]")
+    .replace(Regex("[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}"), "[EMAIL REDACTED]")
 ```
 
 ```kotlin
@@ -716,18 +1043,28 @@ actual fun logError(tag: String, message: String, throwable: Throwable?) {
 13. **Never call `stopKoin()` in production code** — only in test teardown
 14. **Never use `println()` for logging** — use `expect/actual` log functions
 15. **Never skip Room migrations** — always add a `Migration` object when bumping the schema version
+16. **Never omit `contentDescription` on meaningful images/icons** — required for accessibility (TalkBack, VoiceOver)
+17. **Never log sensitive data** — redact tokens, emails, and PII before sending to Crashlytics or any log aggregation service
+18. **Never load unbounded lists** — use `PagingSource` + `Pager` for large datasets
+19. **Never hardcode user-facing strings** — always use `stringResource()` from compose resources
+20. **Never use `left`/`right` padding in Composables** — use `start`/`end` for RTL language support
+21. **Never use `Icons.Default.ArrowBack` for navigation** — use `Icons.AutoMirrored.Filled.ArrowBack` to mirror in RTL
+22. **Never use `reply > 0` on navigation event SharedFlows** — late subscribers would trigger navigation again
+23. **Never keep only one certificate pin** — always pin primary + backup to allow rotation without forcing an update
+24. **Never use `left`/`right` in column/row alignment** — prefer `Start`/`End` which respect layout direction
 
 ---
 
 ## Reference Files
 
-- `references/architecture.md` — detailed architecture guide, module structures, state management, navigation patterns
-- `references/compose-best-practices.md` — composable design, `@Stable`, state hoisting, Material 3, layouts, previews, performance
-- `references/error-handling.md` — `AppError` hierarchy, `safeApiCall`, error mapping, retry logic, UI error display
-- `references/testing.md` — fakes, ViewModel tests with Turbine, Compose UI tests, Room in-memory, Koin test modules
-- `references/ios-interop.md` — Swift naming conventions, nullability bridging, SKIE, coroutines↔Swift Concurrency, collection bridging
-- `references/navigation.md` — deep links, nested nav, bottom navigation, back handling, transitions, `SavedStateHandle`
-- `references/build-system.md` — convention plugins, KSP config, `gradle.properties`, `settings.gradle.kts`, build performance
+- `references/architecture.md` — detailed architecture guide, module structures, feature flags, inter-feature communication, proto DataStore
+- `references/compose-best-practices.md` — composable design, `@Stable`, state hoisting, Material 3, focus management, text field accessibility, dynamic type, previews, performance
+- `references/error-handling.md` — `AppError` hierarchy, `safeApiCall`, recoverable vs fatal, 429 handling, error analytics/breadcrumbs, retry logic
+- `references/testing.md` — fakes, ViewModel tests with Turbine, SharedFlow event testing, Paging tests, screenshot/golden tests, Compose UI tests, Room in-memory
+- `references/ios-interop.md` — Swift naming conventions, SKIE sealed class edge cases, Kotlin/Native memory model, iOS performance, nullability bridging, coroutines↔Swift Concurrency
+- `references/navigation.md` — deep links, cross-module navigation contracts, predictive back, deep link validation, nested nav, bottom navigation, back handling, transitions, `SavedStateHandle`
+- `references/build-system.md` — convention plugins, R8/ProGuard, publishing to Maven, CI Gradle daemon, KSP config, `gradle.properties`, build performance
+- `references/i18n.md` — string resources, plurals, RTL support, dynamic locale change, locale-aware number/currency formatting
 
 ## Official References
 
@@ -740,3 +1077,6 @@ actual fun logError(tag: String, message: String, throwable: Throwable?) {
 - [Koin Multiplatform](https://insert-koin.io/docs/reference/koin-mp/kmp)
 - [Ktor Client](https://ktor.io/docs/client-create-multiplatform-application.html)
 - [Navigation Compose](https://developer.android.com/guide/navigation/design/kotlin-dsl)
+- [Compose Localization](https://www.jetbrains.com/help/kotlin-multiplatform-dev/compose-multiplatform-resources-usage.html)
+- [Predictive Back](https://developer.android.com/guide/navigation/custom-back/predictive-back-gesture)
+- [Paging 3](https://developer.android.com/topic/libraries/architecture/paging/v3-overview)

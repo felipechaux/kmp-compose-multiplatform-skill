@@ -360,3 +360,145 @@ NavHost(...) {
     }
 }
 ```
+
+---
+
+## Cross-Module Navigation Contracts
+
+In multi-module apps, features must not import each other's `Screen` classes. Use a navigation contract interface in the `:api` module:
+
+```kotlin
+// feature/auth/api/AuthNavigation.kt  (feature:auth:api module)
+interface AuthNavigation {
+    val loginRoute: String
+    val registerRoute: String
+    fun navigateToLogin(navController: NavController)
+    fun navigateAfterLogin(navController: NavController)
+}
+```
+
+```kotlin
+// feature/auth/impl  (implements the contract)
+class AuthNavigationImpl : AuthNavigation {
+    override val loginRoute = "auth/login"
+    override val registerRoute = "auth/register"
+
+    override fun navigateToLogin(navController: NavController) {
+        navController.navigate(loginRoute)
+    }
+
+    override fun navigateAfterLogin(navController: NavController) {
+        navController.navigate("home") {
+            popUpTo(loginRoute) { inclusive = true }
+        }
+    }
+}
+```
+
+Register in the root `NavHost` — only the app-level module knows all feature implementations:
+
+```kotlin
+// app/AppNavigation.kt — wires all feature graphs together
+@Composable
+fun AppNavigation(
+    authNav: AuthNavigation = get(),
+    homeNav: HomeNavigation = get()
+) {
+    val navController = rememberNavController()
+
+    NavHost(navController, startDestination = authNav.loginRoute) {
+        authGraph(navController, authNav)
+        homeGraph(navController, homeNav)
+    }
+}
+```
+
+---
+
+## Predictive Back (Android 14+)
+
+Enable the predictive back gesture animation by adding the flag to the Android manifest and using `PredictiveBackHandler` for custom back animations:
+
+```xml
+<!-- AndroidManifest.xml -->
+<application android:enableOnBackInvokedCallback="true" ...>
+```
+
+```kotlin
+// For a custom screen-level back animation with Predictive Back progress
+@Composable
+fun DetailScreen(onBack: () -> Unit) {
+    var scale by remember { mutableFloatStateOf(1f) }
+
+    PredictiveBackHandler { progress ->
+        // progress is a Flow<BackEventCompat> emitting 0.0 → 1.0 as user swipes
+        try {
+            progress.collect { backEvent ->
+                scale = 1f - (backEvent.progress * 0.1f)  // shrink slightly during gesture
+            }
+            // User committed the back gesture
+            onBack()
+        } catch (e: CancellationException) {
+            // User cancelled the back gesture — restore state
+            scale = 1f
+        }
+    }
+
+    Box(modifier = Modifier.scale(scale)) {
+        DetailContent()
+    }
+}
+```
+
+For the default system animation (no custom handling needed), simply set the manifest flag — the system provides the animation automatically.
+
+---
+
+## Deep Link Validation
+
+Validate deep link parameters before processing — never trust incoming URL data:
+
+```kotlin
+// ViewModel — validate deep link arguments from SavedStateHandle
+class DetailViewModel(savedStateHandle: SavedStateHandle) : ViewModel() {
+
+    // Will throw if argument is missing — handle at the NavHost level
+    private val rawId: String = checkNotNull(savedStateHandle[Screen.Detail.ARG_ID]) {
+        "DetailScreen requires a non-null item ID"
+    }
+
+    // Validate format before use
+    val itemId: String = rawId.takeIf { it.isNotBlank() && it.length <= 64 }
+        ?: throw IllegalArgumentException("Invalid item ID: $rawId")
+}
+```
+
+Test deep links in Android with ADB:
+
+```bash
+# Test HTTPS deep link
+adb shell am start -a android.intent.action.VIEW \
+  -d "https://myapp.com/detail/123" \
+  com.example.myapp
+
+# Test custom scheme
+adb shell am start -a android.intent.action.VIEW \
+  -d "myapp://detail/123" \
+  com.example.myapp
+```
+
+Register a `NavDeepLinkRequest` builder in tests to verify routing:
+
+```kotlin
+@Test
+fun deepLink_navigatesToDetailScreen() {
+    val request = NavDeepLinkRequest.Builder
+        .fromUri("https://myapp.com/detail/abc123".toUri())
+        .build()
+    navController.handleDeepLink(request)
+
+    assertEquals(Screen.Detail.route, navController.currentDestination?.route)
+    assertEquals("abc123", navController.currentBackStackEntry
+        ?.arguments?.getString(Screen.Detail.ARG_ID))
+}
+```

@@ -324,6 +324,266 @@ Image(
 
 ---
 
+## Accessibility
+
+Every composable that conveys meaning must be accessible. The Compose accessibility tree is read by TalkBack (Android) and VoiceOver (iOS).
+
+### Content Descriptions
+
+Always provide `contentDescription` for images and icon-only buttons. Use `null` only for purely decorative content:
+
+```kotlin
+// GOOD — meaningful image
+Image(
+    painter = painterResource(Res.drawable.avatar),
+    contentDescription = stringResource(Res.string.user_avatar_description)
+)
+
+// GOOD — decorative image
+Image(
+    painter = painterResource(Res.drawable.background_pattern),
+    contentDescription = null  // explicitly decorative
+)
+
+// GOOD — icon button with description
+IconButton(onClick = onFavoriteClick) {
+    Icon(
+        imageVector = Icons.Default.Favorite,
+        contentDescription = stringResource(Res.string.add_to_favorites)
+    )
+}
+```
+
+### Semantics Modifiers
+
+Use `Modifier.semantics` to provide accessibility metadata beyond what Compose infers:
+
+```kotlin
+// Merge child semantics into a single accessible node
+Card(
+    modifier = Modifier
+        .semantics(mergeDescendants = true) {}
+        .clickable(onClick = onClick)
+) {
+    Text(text = item.title)
+    Text(text = item.subtitle)
+}
+
+// Custom action for complex interactions
+Box(
+    modifier = Modifier.semantics {
+        contentDescription = "Item: ${item.title}"
+        onClick(label = "Open detail") {
+            onItemClick(item.id)
+            true
+        }
+    }
+)
+
+// State descriptions (e.g., toggle buttons)
+val toggleDescription = if (isSelected) "Selected" else "Not selected"
+FilterChip(
+    selected = isSelected,
+    onClick = onToggle,
+    label = { Text(item.label) },
+    modifier = Modifier.semantics {
+        stateDescription = toggleDescription
+    }
+)
+```
+
+### `clearAndSetSemantics` — Override Inferred Semantics
+
+Use when the default accessibility tree is noisy or misleading:
+
+```kotlin
+// Replace all child semantics with a single clean description
+Row(
+    modifier = Modifier.clearAndSetSemantics {
+        contentDescription = "${user.name}, ${user.role}, ${if (user.isOnline) "Online" else "Offline"}"
+    }
+) {
+    Avatar(user = user)
+    Column {
+        Text(user.name)
+        Text(user.role)
+    }
+    OnlineIndicator(isOnline = user.isOnline)
+}
+```
+
+### Minimum Touch Target Size
+
+Material 3 enforces 48dp minimum touch targets. For smaller visual elements, use padding to expand the touch area:
+
+```kotlin
+Icon(
+    imageVector = Icons.Default.Close,
+    contentDescription = "Dismiss",
+    modifier = Modifier
+        .size(24.dp)
+        .padding(12.dp)  // expands touch target to 48dp
+        .clickable(onClick = onDismiss)
+)
+```
+
+### Heading Semantics
+
+Mark section headers so screen readers can navigate by heading:
+
+```kotlin
+Text(
+    text = "Recent Activity",
+    style = MaterialTheme.typography.titleMedium,
+    modifier = Modifier.semantics { heading() }
+)
+```
+
+---
+
+## Focus Management
+
+### FocusRequester — Programmatic Focus
+
+Use `FocusRequester` to direct keyboard focus to a field automatically (e.g., on screen open or after form error):
+
+```kotlin
+@Composable
+fun LoginForm(onSubmit: (String, String) -> Unit) {
+    val emailFocusRequester = remember { FocusRequester() }
+    val passwordFocusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+
+    Column {
+        OutlinedTextField(
+            value = email,
+            onValueChange = { email = it },
+            label = { Text("Email") },
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Email,
+                imeAction = ImeAction.Next
+            ),
+            keyboardActions = KeyboardActions(
+                onNext = { passwordFocusRequester.requestFocus() }
+            ),
+            modifier = Modifier.focusRequester(emailFocusRequester)
+        )
+
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("Password") },
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password,
+                imeAction = ImeAction.Done
+            ),
+            keyboardActions = KeyboardActions(
+                onDone = {
+                    focusManager.clearFocus()
+                    onSubmit(email, password)
+                }
+            ),
+            modifier = Modifier.focusRequester(passwordFocusRequester)
+        )
+    }
+
+    // Auto-focus email on screen open
+    LaunchedEffect(Unit) {
+        emailFocusRequester.requestFocus()
+    }
+}
+```
+
+### Text Field Accessibility
+
+Every `TextField`/`OutlinedTextField` must have:
+- A visible `label` OR a `semantics { contentDescription }` for screen readers
+- Correct `keyboardType` so the right keyboard appears (do not use `Text` keyboard for emails)
+- `imeAction` matching the field's role (`Next` for multi-field forms, `Done`/`Search` for last field)
+- Error state announced to accessibility services via `isError` + `supportingText`:
+
+```kotlin
+OutlinedTextField(
+    value = email,
+    onValueChange = { email = it },
+    label = { Text("Email address") },
+    isError = emailError != null,
+    supportingText = emailError?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
+    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+    modifier = Modifier
+        .fillMaxWidth()
+        .semantics {
+            if (emailError != null) error(emailError)  // announces error to TalkBack
+        }
+)
+```
+
+### Focus Order
+
+Override the default focus traversal order when the visual layout doesn't match the logical reading order:
+
+```kotlin
+// Explicit focus order for a custom layout
+Box {
+    TextField(
+        modifier = Modifier.focusProperties { next = secondFieldFocusRequester }
+    )
+    TextField(
+        modifier = Modifier.focusProperties { previous = firstFieldFocusRequester }
+    )
+}
+```
+
+---
+
+## Dynamic Type / Font Scaling
+
+Do not hardcode `sp` sizes that break at large text scale settings. Allow the system font scale to apply:
+
+```kotlin
+// GOOD — uses TextUnit.Unspecified so MaterialTheme scale applies
+Text(
+    text = content,
+    style = MaterialTheme.typography.bodyLarge  // scales with system font size
+)
+
+// BAD — ignores user's accessibility font size preference
+Text(
+    text = content,
+    fontSize = 16.sp,   // fixed size, still scales with SP by default
+    lineHeight = 16.sp  // hardcoded line height prevents proper scaling
+)
+```
+
+Test for large font scales:
+```kotlin
+// Set font scale in Compose preview
+@Preview(fontScale = 1.5f)
+@Composable
+private fun HomeScreenPreview_LargeFont() {
+    AppTheme { HomeContent(uiState = HomeUiState(), onAction = {}) }
+}
+
+@Preview(fontScale = 2.0f)
+@Composable
+private fun HomeScreenPreview_ExtraLargeFont() {
+    AppTheme { HomeContent(uiState = HomeUiState(), onAction = {}) }
+}
+```
+
+For containers that must not expand with text (e.g., a fixed-height chip), use `nonScaledSp`:
+
+```kotlin
+// Convert dp → sp without scaling — use sparingly, only for layout-critical sizes
+val nonScaledTextSize = with(LocalDensity.current) { 12.dp.toSp() }
+```
+
+---
+
 ## Performance
 
 ### Key Performance Rules

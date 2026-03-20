@@ -24,18 +24,19 @@ Without this skill, Claude gives you generic Android advice. With it, Claude und
 
 | Area | Details |
 |------|---------|
-| **Architecture** | Clean Architecture with feature-based modularization (Now in Android pattern) |
-| **UI** | Compose Multiplatform, Material 3, `@Stable`, state hoisting, previews |
-| **Navigation** | Deep links, nested nav, bottom nav, back handling, transitions, `SavedStateHandle` |
-| **DI** | Koin Multiplatform — modules, ViewModels, scopes, platform DI |
-| **Networking** | Ktor — auth bearer, `HttpRequestRetry`, logging, timeout, domain error mapping |
-| **Persistence** | Room KMP + DataStore KMP — migrations, reactive queries, `@Transaction` |
-| **State** | UDF pattern, StateFlow, SharedFlow events, `stateIn()`, Resource sealed class |
-| **Error Handling** | Typed `AppError` hierarchy, `safeApiCall`, retry with backoff, UI error mapping |
-| **Build System** | Convention plugins, version catalog, KSP config, `gradle.properties`, build performance |
-| **iOS** | SPM wrapper, SKIE, Swift interop, `os_log`, collection bridging, thread safety |
-| **Testing** | Fakes + Turbine, ViewModel tests, Compose UI tests, Room in-memory, Koin teardown |
-| **Logging** | Log levels, Timber (Android), `os_log` (iOS), sensitive data redaction |
+| **Architecture** | Clean Architecture, feature-based modularization, feature flags, inter-feature comms, proto DataStore |
+| **UI** | Compose Multiplatform, Material 3, `@Stable`, state hoisting, focus management, text field a11y, dynamic type |
+| **Navigation** | Deep links, cross-module contracts, predictive back, nested nav, back handling, transitions, `SavedStateHandle` |
+| **DI** | Koin Multiplatform — modules, named qualifiers, ViewModels + `SavedStateHandle`, scopes, platform DI |
+| **Networking** | Ktor — auth bearer, `HttpRequestRetry`, cert pinning, backoff jitter, 429 handling, caching |
+| **Persistence** | Room KMP + DataStore KMP — migrations, reactive queries, Paging 3, FTS, type converters |
+| **State** | UDF pattern, StateFlow, SharedFlow buffer strategies, `stateIn()`, Resource sealed class |
+| **Error Handling** | Typed `AppError`, recoverable vs fatal, 429, error analytics/breadcrumbs, retry with backoff |
+| **Build System** | Convention plugins, R8/ProGuard, Maven publishing, CI Gradle daemon, KSP, version catalog |
+| **iOS** | SPM wrapper, SKIE (sealed enum edge cases), Kotlin/Native memory model, iOS performance, Swift interop |
+| **Testing** | Fakes + Turbine, SharedFlow event tests, Paging tests, screenshot/golden tests, Compose UI tests |
+| **Logging** | Log levels, Timber + CrashlyticsTree (Android), `os_log` (iOS), sensitive data redaction |
+| **i18n** | String resources, plurals, RTL support, dynamic locale change, locale-aware number/currency formatting |
 
 ## Installation
 
@@ -96,14 +97,18 @@ Using the kmp-compose-multiplatform skill, generate a Koin module for my data la
 
 | Without skill | With skill |
 |--------------|-----------|
-| Generic Android ViewModel patterns | UDF pattern with `StateFlow`, `SharedFlow` events, `stateIn()` |
-| Android-only Room setup | Room KMP with migrations, reactive `Flow<List<T>>` queries, `@Transaction` |
-| `Hilt` / `Dagger` suggestions | Koin Multiplatform with platform-specific modules and test teardown |
-| Single-platform Retrofit | Ktor with auth bearer, logging, timeout, and domain error mapping |
-| Raw `String` errors everywhere | Typed `AppError` sealed class with `safeApiCall` and retry logic |
-| Mixed architecture advice | Strict Clean Architecture — domain never imports data |
-| Guessed iOS integration | SPM wrapper, SKIE for Swift Concurrency, collection bridging, Swift naming |
-| `println()` for debugging | `expect`/`actual` log functions (`Log.d` on Android, `NSLog` on iOS) |
+| Generic Android ViewModel patterns | UDF pattern with `StateFlow`, `SharedFlow` events, `stateIn()`, buffer strategies |
+| Android-only Room setup | Room KMP with migrations, reactive `Flow<List<T>>` queries, Paging 3, FTS |
+| `Hilt` / `Dagger` suggestions | Koin Multiplatform with named qualifiers, `SavedStateHandle`, scopes, test teardown |
+| Single-platform Retrofit | Ktor with auth bearer, cert pinning, backoff jitter, 429 handling, caching |
+| Raw `String` errors everywhere | Typed `AppError` sealed class, recoverable vs fatal, error analytics, 429 retry |
+| Mixed architecture advice | Strict Clean Architecture with feature flags and inter-feature communication patterns |
+| Guessed iOS integration | SPM wrapper, SKIE sealed enum edge cases, Kotlin/Native memory model, iOS performance |
+| `println()` for debugging | Timber + CrashlyticsTree (Android), `os_log` (iOS), sensitive data redaction |
+| Hardcoded UI strings | String resources, plurals, RTL support, dynamic locale change |
+| No accessibility guidance | Focus management, text field a11y, 48dp touch targets, screen reader semantics |
+| No screenshot regression tests | Paparazzi golden tests, SharedFlow event tests, Paging tests |
+| No build optimization | R8/ProGuard rules, Maven publishing, CI Gradle daemon config, convention plugins |
 
 ## Skill Content Overview
 
@@ -113,26 +118,26 @@ The skill ([`.claude/skills/kmp-compose-multiplatform/`](.claude/skills/kmp-comp
 1. **Core Principles** — Foundational rules for KMP development
 2. **Project Structure** — Module and package layout conventions
 3. **Architecture Guidelines** — Layer responsibilities, dependency rules, typed error handling
-4. **Compose Best Practices** — `@Stable`, state hoisting, Material 3, modifiers, previews
-5. **Navigation** — Type-safe routing, NavHostController, `SharedFlow` navigation events
-6. **KMP Patterns** — `expect`/`actual`, source sets, platform configuration
-7. **Dependency Injection** — Koin module structure, scopes, initialization
-8. **Build System** — Version catalog, BuildKonfig, KSP setup
-9. **Data Persistence** — Room KMP (migrations, reactive queries) and DataStore
-10. **Networking** — Ktor client with auth, logging, error mapping
-11. **Logging** — `expect`/`actual` log functions (Android + iOS)
-12. **iOS Integration** — SPM, `ComposeUIViewController`, Swift interop
-13. **Common Pitfalls** — 15 mistakes to avoid in KMP projects
-14. **Official References** — Links to authoritative documentation
+4. **KMP Patterns** — `expect`/`actual`, source sets, platform configuration
+5. **Dependency Injection** — Koin modules, named qualifiers, `SavedStateHandle`, scopes
+6. **Build System** — Version catalog, BuildKonfig, KSP setup
+7. **Data Persistence** — Room KMP (migrations, reactive queries, Paging 3, FTS) and DataStore
+8. **Networking** — Ktor with auth, cert pinning, backoff jitter, caching, 429 handling
+9. **Internationalization** — String resources, plurals, RTL support, dynamic locale change
+10. **Testing Strategy** — Fakes, SharedFlow event tests, Paging tests, screenshot tests
+11. **Logging** — `expect`/`actual` log functions, Timber + CrashlyticsTree (Android), `os_log` (iOS)
+12. **Common Pitfalls** — 24 mistakes to avoid in KMP projects
+13. **Official References** — Links to authoritative documentation
 
 **`references/`** — deep-dive guides:
-- `architecture.md` — module structures, state management, navigation patterns
-- `compose-best-practices.md` — `@Stable`, `derivedStateOf`, Material 3, performance
-- `error-handling.md` — `AppError` hierarchy, `safeApiCall`, retry logic, UI error mapping
-- `testing.md` — fakes, Turbine, ViewModel tests, Compose UI tests, Room in-memory, Koin teardown
-- `ios-interop.md` — Swift naming, nullability, SKIE, `os_log`, coroutines↔Swift Concurrency, collection bridging
-- `navigation.md` — deep links, nested nav, bottom nav, back handling, transitions, `SavedStateHandle`
-- `build-system.md` — convention plugins, KSP config, `gradle.properties`, `settings.gradle.kts`, build performance
+- `architecture.md` — module structures, feature flags, inter-feature comms, proto DataStore, state management
+- `compose-best-practices.md` — `@Stable`, focus management, text field a11y, dynamic type, Material 3, performance
+- `error-handling.md` — `AppError` hierarchy, recoverable vs fatal, 429, error analytics, `safeApiCall`, retry logic
+- `testing.md` — fakes, Turbine, SharedFlow event testing, Paging tests, screenshot/golden tests, Compose UI tests
+- `ios-interop.md` — Swift naming, SKIE sealed class edge cases, Kotlin/Native memory model, iOS performance
+- `navigation.md` — deep links, cross-module contracts, predictive back, deep link validation, transitions
+- `build-system.md` — convention plugins, R8/ProGuard, Maven publishing, CI Gradle daemon, KSP, build performance
+- `i18n.md` — string resources, plurals, RTL support, dynamic locale change, locale-aware number/currency formatting
 
 ## Architecture Reference
 
